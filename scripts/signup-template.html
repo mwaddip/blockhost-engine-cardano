@@ -130,11 +130,17 @@
             background: var(--bg);
             border: 1px solid var(--border);
             border-radius: 8px;
-            padding: 0.625rem 0.75rem;
+            padding: 0.75rem 1rem;
             font-size: 0.875rem;
             cursor: pointer;
             color: var(--text);
             transition: border-color 0.2s, background 0.2s;
+            width: auto;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            text-transform: none;
         }
         .wallet-btn:hover { border-color: var(--primary); background: var(--surface-hover); }
         .wallet-address {

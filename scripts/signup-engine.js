@@ -25,10 +25,11 @@
 
     // ── Koios REST base URL ─────────────────────────────────────────────
 
-    function koiosBase(network) {
-        if (network === 'mainnet') return 'https://api.koios.rest/api/v1';
-        if (network === 'preview') return 'https://preview.koios.rest/api/v1';
-        return 'https://preprod.koios.rest/api/v1';
+    function koiosBase(_network) {
+        // Use relative path — requests go through our local proxy which
+        // forwards to Koios, avoiding CORS issues in the browser.
+        // The proxy server maps /api/v1/* → https://{network}.koios.rest/api/v1/*
+        return '/api/v1';
     }
 
     /**
@@ -387,7 +388,16 @@
         function makeBtn(key) {
             var btn = document.createElement('button');
             btn.className = 'wallet-btn';
-            btn.textContent = (cardano[key] && cardano[key].name) ? cardano[key].name : key;
+            var rawName = (cardano[key] && cardano[key].name) ? cardano[key].name : key;
+            // Capitalize first letter
+            btn.textContent = rawName.charAt(0).toUpperCase() + rawName.slice(1);
+            // Add wallet icon if available
+            if (cardano[key] && cardano[key].icon) {
+                var img = document.createElement('img');
+                img.src = cardano[key].icon;
+                img.style.cssText = 'width:20px;height:20px;margin-right:8px;vertical-align:middle;border-radius:4px';
+                btn.prepend(img);
+            }
             btn.addEventListener('click', function () { connectWallet(key); });
             walletList.appendChild(btn);
             found++;
@@ -1423,8 +1433,23 @@
 
     // ── Initialise ────────────────────────────────────────────────────────
 
-    // Detect wallets immediately
-    detectWallets();
+    // Wallet extensions inject window.cardano asynchronously after page load.
+    // Retry detection a few times with increasing delays.
+    function detectWithRetry(attempt) {
+        if (attempt > 5) return; // give up after ~3 seconds
+        if (window.cardano && typeof window.cardano === 'object' && Object.keys(window.cardano).length > 0) {
+            detectWallets();
+        } else {
+            setTimeout(function () { detectWithRetry(attempt + 1); }, 300 * attempt);
+        }
+    }
+
+    // Try immediately, then retry
+    if (document.readyState === 'complete') {
+        detectWithRetry(0);
+    } else {
+        window.addEventListener('load', function () { detectWithRetry(0); });
+    }
 
     // Start fetching plans in the background (may show before wallet connects)
     loadPlans();
