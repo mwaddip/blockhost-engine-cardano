@@ -15,7 +15,7 @@
  * Core function executeWithdraw() is used by fund-manager.
  */
 
-import { Constr, Data, applyParamsToScript } from "@lucid-evolution/lucid";
+import { Constr, Data } from "@lucid-evolution/lucid";
 import type { UTxO } from "@lucid-evolution/lucid";
 import type { Addressbook } from "../../fund-manager/types.js";
 import type { SubscriptionDatum } from "../../cardano/types.js";
@@ -191,18 +191,43 @@ export async function executeWithdraw(
   const lucid = await initLucidWithWallet(signingRole, book);
   const signerAddr = await lucid.wallet().address();
 
-  // Build the validator address from config
-  const validatorAddr = web3.subscriptionValidatorAddress;
-  if (!validatorAddr) {
-    throw new Error(
-      "blockchain.subscription_validator_address not set in web3-defaults.yaml",
-    );
+  // Find subscription UTXOs by scanning for beacon tokens.
+  // Subscriptions live at CIP-89 addresses (script payment + subscriber staking),
+  // so there's no single address to query. Instead we find all UTXOs holding
+  // any token under the beacon policy.
+  const beaconPolicyId = web3.beaconPolicyId;
+  console.error(`Scanning for beacon tokens (policy: ${beaconPolicyId.slice(0, 16)}...)...`);
+
+  // Query Koios for all addresses holding beacon policy tokens
+  const beaconHolders = await fetch("https://preprod.koios.rest/api/v1/policy_asset_addresses", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ _asset_policy: beaconPolicyId }),
+  }).then(r => r.json() as Promise<Array<{ payment_address: string; asset_name: string; quantity: string }>>);
+
+  if (!beaconHolders || beaconHolders.length === 0) {
+    console.log("No subscription UTXOs found (no beacon tokens on-chain).");
+    return;
   }
 
-  // Query UTXOs at the validator address
-  console.error(`Querying UTXOs at ${validatorAddr.slice(0, 30)}...`);
-  const utxos = await lucid.utxosAt(validatorAddr);
-  console.error(`Found ${utxos.length} UTXOs at validator address`);
+  // Get UTXOs from each unique address holding beacons
+  const uniqueAddresses = [...new Set(beaconHolders.map(h => h.payment_address))];
+  console.error(`Found beacons at ${uniqueAddresses.length} address(es)`);
+
+  const utxos: UTxO[] = [];
+  for (const addr of uniqueAddresses) {
+    try {
+      const addrUtxos = await lucid.utxosAt(addr);
+      // Filter for UTXOs that actually contain a beacon token
+      for (const u of addrUtxos) {
+        const hasBeacon = Object.keys(u.assets).some(unit => unit.startsWith(beaconPolicyId));
+        if (hasBeacon) utxos.push(u);
+      }
+    } catch {
+      // Address might not have UTXOs anymore
+    }
+  }
+  console.error(`Found ${utxos.length} subscription UTXOs with beacons`);
 
   if (utxos.length === 0) {
     console.log("No subscription UTXOs found.");
@@ -233,37 +258,25 @@ export async function executeWithdraw(
   // Load validator scripts and apply parameters
   const scripts = loadValidatorScripts();
 
-  // Apply parameters to the subscription validator:
-  // subscription.subscription.spend takes (server_key_hash, service_address_key_hash)
-  // We need the server's payment key hash from the signer address
+  // The blueprint (plutus.json) has params already applied via `aiken blueprint apply`.
+  // Use compiledCode directly — do NOT re-apply params.
+  const subscriptionValidator = {
+    type: "PlutusV3" as const,
+    script: scripts.subscriptionCompiledCode,
+  };
+
+  const beaconPolicy = {
+    type: "PlutusV3" as const,
+    script: scripts.beaconCompiledCode,
+  };
+
+  // Get server key hash for addSignerKey
   const { getAddressDetails } = await import("@lucid-evolution/lucid");
   const signerDetails = getAddressDetails(signerAddr);
   const serverKeyHash = signerDetails.paymentCredential?.hash;
   if (!serverKeyHash) {
     throw new Error("Could not extract payment key hash from signer address");
   }
-
-  // service_address_key_hash is also the server's key hash (same signer)
-  const parameterizedSubscription = applyParamsToScript(
-    scripts.subscriptionCompiledCode,
-    [serverKeyHash, serverKeyHash],
-  );
-
-  const subscriptionValidator = {
-    type: "PlutusV3" as const,
-    script: parameterizedSubscription,
-  };
-
-  // Parameterize beacon policy: beacon.beacon.mint takes (subscription_validator_hash)
-  const parameterizedBeacon = applyParamsToScript(
-    scripts.beaconCompiledCode,
-    [web3.subscriptionValidatorHash],
-  );
-
-  const beaconPolicy = {
-    type: "PlutusV3" as const,
-    script: parameterizedBeacon,
-  };
 
   // Build redeemer for ServiceCollect (Constr index 0, no fields)
   const serviceCollectRedeemer = Data.to(new Constr(0, []));
@@ -293,20 +306,10 @@ export async function executeWithdraw(
 
     totalCollected += info.collectAmount;
 
-    if (info.fullyConsumed) {
-      // Burn the beacon token for this subscription
-      // Beacon asset name is the UTXO tx hash + output index (or similar)
-      // For now, look for beacon tokens in the UTXO's assets
-      const beaconPolicyId = web3.beaconPolicyId;
-      for (const [unit, qty] of Object.entries(info.utxo.assets)) {
-        if (unit.startsWith(beaconPolicyId) && qty > 0n) {
-          const existing = beaconBurns[unit] ?? 0n;
-          beaconBurns[unit] = existing - qty; // negative = burn
-          hasBeaconBurns = true;
-        }
-      }
-      // No continuing output needed — subscription is consumed
-    } else {
+    // Always create a continuing output (even for fully consumed subscriptions).
+    // The validator's ServiceCollect path requires a continuing output with
+    // updated datum. For fully consumed subscriptions, amount_remaining = 0.
+    {
       // Create continuing output with updated datum
       const updatedDatum: SubscriptionDatum = {
         ...info.datum,
@@ -348,8 +351,9 @@ export async function executeWithdraw(
         continuingAssets[payUnit] = inputTokenAmount - info.collectAmount;
       }
 
+      // Continue to the same CIP-89 address (subscriber's script address)
       tx = tx.pay.ToAddressWithData(
-        validatorAddr,
+        info.utxo.address,
         { kind: "inline", value: datumCbor },
         continuingAssets,
       );
