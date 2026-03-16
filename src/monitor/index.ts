@@ -19,6 +19,12 @@ import {
 } from "../handlers/index.js";
 import { runReconciliation as reconcileNftOwnership } from "../reconcile/index.js";
 import { runFundManager, shouldRunFundCycle, isProvisioningInProgress } from "../fund-manager/index.js";
+import {
+  processAdminCommands,
+  initAdminCommands,
+  shutdownAdminCommands,
+  loadAdminConfig,
+} from "../admin/index.js";
 
 // ── Intervals ─────────────────────────────────────────────────────────────────
 
@@ -55,6 +61,7 @@ async function poll(
   validatorAddress: string,
   beaconPolicyId: string,
   nftPolicyId: string,
+  adminConfig: ReturnType<typeof loadAdminConfig>,
 ): Promise<void> {
   while (running) {
     try {
@@ -84,6 +91,15 @@ async function poll(
           await handleSubscriptionRemoved(sub);
         } catch (err) {
           console.error(`[MONITOR] Error handling removal ${sub.beaconName}: ${err}`);
+        }
+      }
+
+      // Scan admin wallet transactions for metadata commands (label 7368)
+      if (adminConfig) {
+        try {
+          await processAdminCommands(client, adminConfig);
+        } catch (err) {
+          console.error(`[MONITOR] Admin command scan error: ${err}`);
         }
       }
 
@@ -152,6 +168,23 @@ async function main(): Promise<void> {
 
   const client = getBlockfrost(config.blockfrostProjectId, config.network);
 
+  // Load admin config (optional — null means admin commands are disabled)
+  const adminConfig = loadAdminConfig();
+  if (adminConfig) {
+    initAdminCommands();
+    console.log(`Admin wallet:     ${adminConfig.wallet_address}`);
+  } else {
+    console.log(`Admin commands:   disabled (no admin config in blockhost.yaml)`);
+  }
+
+  // Register shutdown hook for admin (closes active knock sessions on exit)
+  process.on("SIGTERM", () => {
+    shutdownAdminCommands().catch(() => undefined);
+  });
+  process.on("SIGINT", () => {
+    shutdownAdminCommands().catch(() => undefined);
+  });
+
   console.log(`Network:          ${config.network}`);
   console.log(`Validator:        ${config.subscriptionValidatorAddress}`);
   console.log(`Beacon policy:    ${config.beaconPolicyId}`);
@@ -163,7 +196,13 @@ async function main(): Promise<void> {
   lastReconcile = Date.now();
 
   console.log("Monitor is running. Press Ctrl+C to stop.\n");
-  await poll(client, config.subscriptionValidatorAddress, config.beaconPolicyId, config.nftPolicyId);
+  await poll(
+    client,
+    config.subscriptionValidatorAddress,
+    config.beaconPolicyId,
+    config.nftPolicyId,
+    adminConfig,
+  );
 }
 
 main().catch((err) => {
