@@ -4,9 +4,9 @@
  * Loaded after an inline CONFIG block injected by generate-signup-page.
  * Handles:
  *   1. CIP-30 wallet detection and connection
- *   2. Plan fetching from plan reference UTXOs via Blockfrost REST API
+ *   2. Plan fetching from plan reference UTXOs via Koios REST API
  *   3. Cost calculation
- *   4. Subscription transaction building (inline CBOR + CIP-30 + Blockfrost)
+ *   4. Subscription transaction building (inline CBOR + CIP-30 + Koios)
  *
  * Expected global: CONFIG (set by the inline script block in signup-template.html)
  *
@@ -23,30 +23,64 @@
 (function () {
     'use strict';
 
-    // ── Blockfrost REST base URL ─────────────────────────────────────────
+    // ── Koios REST base URL ─────────────────────────────────────────────
 
-    function blockfrostBase(network) {
-        if (network === 'mainnet') return 'https://cardano-mainnet.blockfrost.io/api/v0';
-        if (network === 'preview') return 'https://cardano-preview.blockfrost.io/api/v0';
-        return 'https://cardano-preprod.blockfrost.io/api/v0';
+    function koiosBase(network) {
+        if (network === 'mainnet') return 'https://api.koios.rest/api/v1';
+        if (network === 'preview') return 'https://preview.koios.rest/api/v1';
+        return 'https://preprod.koios.rest/api/v1';
     }
 
     /**
-     * Blockfrost fetch helper.
-     * Uses CONFIG.blockfrostProjectId as the project_id header.
+     * Koios fetch helper (POST with JSON body).
+     * No API key needed — Koios is free and public.
+     * Includes basic retry logic for 429 (rate limit).
      *
-     * @param {string} path - API path starting with /
+     * @param {string} endpoint - API endpoint starting with /
+     * @param {object|null} body - JSON body for POST (null for GET requests)
+     * @param {object} [opts] - Options: { method, contentType, rawBody }
      * @returns {Promise<unknown>}
      */
-    async function bfetch(path) {
-        var base = blockfrostBase(CONFIG.network);
-        var res = await fetch(base + path, {
-            headers: { 'project_id': CONFIG.blockfrostProjectId },
-        });
+    async function koiosFetch(endpoint, body, opts) {
+        var base = koiosBase(CONFIG.network);
+        opts = opts || {};
+        var method = opts.method || (body != null ? 'POST' : 'GET');
+        var headers = {};
+        var fetchBody;
+
+        if (opts.contentType) {
+            headers['Content-Type'] = opts.contentType;
+            fetchBody = opts.rawBody;
+        } else if (body != null) {
+            headers['Content-Type'] = 'application/json';
+            fetchBody = JSON.stringify(body);
+        }
+
+        async function doFetch() {
+            return fetch(base + endpoint, {
+                method: method,
+                headers: headers,
+                body: fetchBody,
+            });
+        }
+
+        var res = await doFetch();
+
+        // Retry once on 429 (rate limit) after a short delay
+        if (res.status === 429) {
+            await new Promise(function (r) { setTimeout(r, 1500); });
+            res = await doFetch();
+        }
+
         if (!res.ok) {
             if (res.status === 404) return null;
             var errBody = await res.text().catch(function () { return ''; });
-            throw new Error('Blockfrost ' + res.status + ': ' + errBody.slice(0, 120));
+            throw new Error('Koios ' + res.status + ': ' + errBody.slice(0, 120));
+        }
+
+        // Koios submittx returns plain text (tx hash)
+        if (opts.contentType === 'application/cbor') {
+            return res.text();
         }
         return res.json();
     }
@@ -124,7 +158,7 @@
         return bytesToHex(result);
     }
 
-    // ── Plan data (fetched from Blockfrost) ───────────────────────────────
+    // ── Plan data (fetched from Koios) ─────────────────────────────────────
 
     /**
      * Plan record.
@@ -135,25 +169,29 @@
     var plans = [];
 
     /**
-     * Parse a plan datum from a Blockfrost UTXO's inline_datum JSON.
+     * Parse a plan datum from a Koios UTXO's inline_datum JSON.
      *
      * The on-chain plan datum structure (set by blockhost-bw plan create) is:
      *   Constr(0, [plan_id, name, price_per_day, payment_assets, active])
      *
-     * Blockfrost exposes inline data as a JSON object under utxo.inline_datum
-     * using the generic Plutus data representation:
+     * Koios (with _extended: true) returns inline_datum as:
+     *   { "value": { "constructor": 0, "fields": [...] }, "bytes": "..." }
+     *
+     * The inner value uses the generic Plutus data representation:
      *   { "constructor": 0, "fields": [ int, bytes, int, list, int ] }
      *
      * This is a best-effort parser — the exact shape depends on how the
      * datum is serialised by the Aiken validator. Adjust field indices if
      * the validator changes its datum layout.
      *
-     * @param {object} utxo - UTXO object from Blockfrost /addresses/{addr}/utxos
+     * @param {object} utxo - UTXO object from Koios /address_utxos
      * @returns {Plan|null}
      */
     function parsePlanDatum(utxo) {
         try {
-            var datum = utxo.inline_datum;
+            // Koios wraps inline datum in { value: {...}, bytes: "..." }
+            var rawDatum = utxo.inline_datum;
+            var datum = rawDatum && rawDatum.value ? rawDatum.value : rawDatum;
             if (!datum || !datum.fields || !Array.isArray(datum.fields)) return null;
             var fields = datum.fields;
             // fields[0] = planId (int)
@@ -209,7 +247,7 @@
     }
 
     /**
-     * Fetch active plans from the validator address via Blockfrost.
+     * Fetch active plans from the validator address via Koios.
      * Plans are stored as inline-datum UTXOs at CONFIG.validatorAddress.
      */
     async function loadPlans() {
@@ -218,22 +256,31 @@
             sel.innerHTML = '<option value="">Validator address not configured</option>';
             return;
         }
-        if (!CONFIG.blockfrostProjectId) {
-            sel.innerHTML = '<option value="">Blockfrost project ID not configured</option>';
-            return;
-        }
 
         try {
-            // Query all UTXOs at the validator address; plans carry a beacon token
-            // whose policy equals CONFIG.beaconPolicyId (if set).
-            var utxos;
-            if (CONFIG.beaconPolicyId) {
-                utxos = await bfetch('/addresses/' + encodeURIComponent(CONFIG.validatorAddress) + '/utxos/' + encodeURIComponent(CONFIG.beaconPolicyId));
-            } else {
-                utxos = await bfetch('/addresses/' + encodeURIComponent(CONFIG.validatorAddress) + '/utxos');
-            }
+            // Query all UTXOs at the validator address via Koios POST /address_utxos
+            // with _extended: true to get inline datum data.
+            var utxos = await koiosFetch('/address_utxos', {
+                _addresses: [CONFIG.validatorAddress],
+                _extended: true,
+            });
 
             if (!utxos || !Array.isArray(utxos) || utxos.length === 0) {
+                sel.innerHTML = '<option value="">No plans available</option>';
+                return;
+            }
+
+            // If beaconPolicyId is set, filter to UTXOs carrying that token
+            if (CONFIG.beaconPolicyId) {
+                utxos = utxos.filter(function (u) {
+                    if (!u.asset_list || !Array.isArray(u.asset_list)) return false;
+                    return u.asset_list.some(function (a) {
+                        return a.policy_id === CONFIG.beaconPolicyId;
+                    });
+                });
+            }
+
+            if (utxos.length === 0) {
                 sel.innerHTML = '<option value="">No plans available</option>';
                 return;
             }
@@ -540,8 +587,9 @@
                 throw new Error('No UTXOs in wallet — fund your wallet first');
             }
 
-            var protocolParams = await bfetch('/epochs/latest/parameters');
-            if (!protocolParams) throw new Error('Failed to fetch protocol parameters');
+            var ppArr = await koiosFetch('/epoch_params?limit=1', null);
+            if (!ppArr || !Array.isArray(ppArr) || ppArr.length === 0) throw new Error('Failed to fetch protocol parameters');
+            var protocolParams = ppArr[0];
 
             // C.8  Compute min-UTXO lovelace for the script output
             //      Approximate: 2 ADA is generous for a datum-bearing UTXO with one native token
@@ -583,9 +631,9 @@
             showStatus('subscribe-status', '<span class="spinner"></span>Awaiting wallet signature...', 'info');
             var signedTxHex = await api.signTx(txCborHex, true);
 
-            // C.12 Submit via Blockfrost REST API
+            // C.12 Submit via Koios REST API
             showStatus('subscribe-status', '<span class="spinner"></span>Submitting transaction...', 'info');
-            var txHash = await submitViaBlockfrost(signedTxHex);
+            var txHash = await submitViaKoios(signedTxHex);
 
             console.log('Transaction submitted:', txHash);
 
@@ -815,9 +863,10 @@
         }
 
         // ── Get current slot for validity range ─────────────────────────
-        var tipData = await bfetch('/blocks/latest');
-        if (!tipData) throw new Error('Failed to fetch latest block');
-        var currentSlot = tipData.slot || 0;
+        var tipArr = await koiosFetch('/tip', null);
+        if (!tipArr || !Array.isArray(tipArr) || tipArr.length === 0) throw new Error('Failed to fetch chain tip');
+        var tipData = tipArr[0];
+        var currentSlot = tipData.abs_slot || 0;
 
         // Validity range: valid from (current slot - 60) to (current slot + 900)
         // This gives a 15-minute window for submission
@@ -971,7 +1020,7 @@
 
         // Actually, for CIP-30 signTx, many wallets accept the transaction without
         // a pre-computed script_data_hash if the witness set contains the scripts.
-        // The wallet or submitter computes it. However, Blockfrost submission requires it.
+        // The wallet or submitter computes it. However, node submission requires it.
 
         // Build the script_data_hash using a simplified approach:
         // hash = blake2b_256(redeemers_bytes || empty_datums || cost_model_bytes)
@@ -1353,33 +1402,23 @@
     }
 
     /**
-     * Submit a signed transaction via Blockfrost REST API.
-     * POST /tx/submit with Content-Type: application/cbor
+     * Submit a signed transaction via Koios REST API.
+     * POST /submittx with Content-Type: application/cbor and raw CBOR bytes.
      *
      * @param {string} signedTxHex - Signed transaction CBOR hex
      * @returns {Promise<string>} Transaction hash
      */
-    async function submitViaBlockfrost(signedTxHex) {
-        var base = blockfrostBase(CONFIG.network);
+    async function submitViaKoios(signedTxHex) {
         var txBytes = hexToBytes(signedTxHex);
 
-        var res = await fetch(base + '/tx/submit', {
+        var result = await koiosFetch('/submittx', null, {
             method: 'POST',
-            headers: {
-                'project_id': CONFIG.blockfrostProjectId,
-                'Content-Type': 'application/cbor',
-            },
-            body: txBytes,
+            contentType: 'application/cbor',
+            rawBody: txBytes,
         });
 
-        if (!res.ok) {
-            var errBody = await res.text().catch(function () { return ''; });
-            throw new Error('Transaction submission failed (' + res.status + '): ' + errBody.slice(0, 200));
-        }
-
-        var txHash = await res.text();
-        // Blockfrost returns the hash with quotes
-        return txHash.replace(/"/g, '').trim();
+        // Koios returns the hash as plain text (may have quotes)
+        return result.replace(/"/g, '').trim();
     }
 
     // ── Initialise ────────────────────────────────────────────────────────

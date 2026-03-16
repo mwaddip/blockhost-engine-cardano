@@ -147,7 +147,6 @@ def generate_page(config: dict, template: str) -> str:
         '{{BEACON_SCRIPT_CBOR}}':             config.get('beacon_script_cbor', ''),
         '{{SUBSCRIPTION_VALIDATOR_HASH}}':    config.get('subscription_validator_hash',
                                                          bc.get('subscription_validator_hash', '')),
-        '{{BLOCKFROST_PROJECT_ID}}':          bc.get('blockfrost_project_id', ''),
         '{{NETWORK}}':                        bc.get('network', 'preprod'),
         '{{PAGE_TITLE}}':                     config.get('page_title', 'BlockHost - Get Your Server'),
         '{{PRIMARY_COLOR}}':                  config.get('primary_color', '#0033AD'),
@@ -267,7 +266,6 @@ def main():
     print(f'  network:              {bc.get("network", "preprod")}')
     print(f'  validatorAddress:     {bc.get("subscription_validator_address", "NOT SET")}')
     print(f'  beaconPolicyId:       {bc.get("beacon_policy_id", "NOT SET")}')
-    print(f'  blockfrostProjectId:  {bc.get("blockfrost_project_id", "NOT SET")}')
     pub = config.get('server_public_key', '')
     print(f'  serverPublicKey:      {(pub[:20] + "...") if pub else "NOT SET"}')
 
