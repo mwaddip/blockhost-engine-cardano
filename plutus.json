@@ -1,0 +1,306 @@
+{
+  "preamble": {
+    "title": "blockhost/cardano",
+    "description": "BlockHost subscription validators for Cardano",
+    "version": "0.1.0",
+    "plutusVersion": "v3",
+    "compiler": {
+      "name": "Aiken",
+      "version": "v1.1.21+42babe5"
+    },
+    "license": "MIT"
+  },
+  "validators": [
+    {
+      "title": "beacon.beacon.mint",
+      "redeemer": {
+        "title": "redeemer",
+        "schema": {
+          "$ref": "#/definitions/blockhost~1types~1BeaconRedeemer"
+        }
+      },
+      "parameters": [
+        {
+          "title": "subscription_validator_hash",
+          "schema": {
+            "$ref": "#/definitions/aiken~1crypto~1ScriptHash"
+          }
+        }
+      ],
+      "compiledCode": "5901d3010100229800aba2aba1aba0aab9faab9eaab9dab9a9bae0024888888896600264653001300900198049805000cdc3a400130090024888966002600460126ea800e266446644b300130060018acc004c038dd5004400a2c807a2b300130030018acc004c038dd5004400a2c807a2c806100c099912cc004c018c034dd500445660033001002a519112cc0040062600c00514a08079001456600264660020026eb0c048c04cc04cc03cdd5003112cc004006297ae0899912cc004c966002601060246ea8006266e3c040dd7180b18099baa0018a504044602a60246ea8c054c048dd500144cc050008cc0100100062660080080028080c04c004c05000501145284528a01e8a50403119800801528c8896600200313370e0049000c528201e40048060c8c8cc004004dd59808980918091809180918071baa0052259800800c00e2646644b30013372201000515980099b8f0080028800c01901044cc014014c0580110101bae300f001375660200026024002808052f5bded8c0444653001001802400d0011112cc00400a200313298008024c05c00f3001375c6024003375a602600300240148020c05400901318059baa006375c601a60146ea800cdc3a4005164020300900130043754013149a26cac8011",
+      "hash": "a7b6f2eb81b18111ea089ef7b05c3c028c618779a1d2baa426045291"
+    },
+    {
+      "title": "beacon.beacon.else",
+      "redeemer": {
+        "schema": {}
+      },
+      "parameters": [
+        {
+          "title": "subscription_validator_hash",
+          "schema": {
+            "$ref": "#/definitions/aiken~1crypto~1ScriptHash"
+          }
+        }
+      ],
+      "compiledCode": "5901d3010100229800aba2aba1aba0aab9faab9eaab9dab9a9bae0024888888896600264653001300900198049805000cdc3a400130090024888966002600460126ea800e266446644b300130060018acc004c038dd5004400a2c807a2b300130030018acc004c038dd5004400a2c807a2c806100c099912cc004c018c034dd500445660033001002a519112cc0040062600c00514a08079001456600264660020026eb0c048c04cc04cc03cdd5003112cc004006297ae0899912cc004c966002601060246ea8006266e3c040dd7180b18099baa0018a504044602a60246ea8c054c048dd500144cc050008cc0100100062660080080028080c04c004c05000501145284528a01e8a50403119800801528c8896600200313370e0049000c528201e40048060c8c8cc004004dd59808980918091809180918071baa0052259800800c00e2646644b30013372201000515980099b8f0080028800c01901044cc014014c0580110101bae300f001375660200026024002808052f5bded8c0444653001001802400d0011112cc00400a200313298008024c05c00f3001375c6024003375a602600300240148020c05400901318059baa006375c601a60146ea800cdc3a4005164020300900130043754013149a26cac8011",
+      "hash": "a7b6f2eb81b18111ea089ef7b05c3c028c618779a1d2baa426045291"
+    },
+    {
+      "title": "nft.nft.mint",
+      "redeemer": {
+        "title": "redeemer",
+        "schema": {
+          "$ref": "#/definitions/blockhost~1types~1NftRedeemer"
+        }
+      },
+      "parameters": [
+        {
+          "title": "server_key_hash",
+          "schema": {
+            "$ref": "#/definitions/aiken~1crypto~1VerificationKeyHash"
+          }
+        }
+      ],
+      "compiledCode": "5901b7010100229800aba2aba1aab9faab9eaab9dab9a9bae002488888896600264653001300800198041804800cdc3a400130080024888966002600460126ea800e2646644b300130050018acc004c034dd5003c00a2c80722b30013370e9001000c566002601a6ea801e00516403916402c8058660026464660020026eacc03cc040c040c040c040c034dd5002112cc00400600713233225980099b910070028acc004cdc78038014400600c807a26600a00a60280088078dd718070009bab300f0013010001403c297adef6c60911194c0040060090034004444b30010028800c4ca60020093015003cc004dd71808800cdd69809000c0090052008301300240492232330010013758602060226022602260226022602260226022601c6ea800c896600200314a115980099b8f375c602200200714a313300200230120014034808122259800980318069baa0088acc004cc00401402e33001003a519112cc004006266e1c00920028a50403c80122c80622b30013300100500b8cc00400e946444b3001001899b8700248006294100f20048b20184030300a375400a6eb8c030c028dd5001c590080c020004c010dd5004452689b2b20041",
+      "hash": "32e39f6610808c340b7de42fbab42ea9c10f0b5fa7211bf069903cdc"
+    },
+    {
+      "title": "nft.nft.else",
+      "redeemer": {
+        "schema": {}
+      },
+      "parameters": [
+        {
+          "title": "server_key_hash",
+          "schema": {
+            "$ref": "#/definitions/aiken~1crypto~1VerificationKeyHash"
+          }
+        }
+      ],
+      "compiledCode": "5901b7010100229800aba2aba1aab9faab9eaab9dab9a9bae002488888896600264653001300800198041804800cdc3a400130080024888966002600460126ea800e2646644b300130050018acc004c034dd5003c00a2c80722b30013370e9001000c566002601a6ea801e00516403916402c8058660026464660020026eacc03cc040c040c040c040c034dd5002112cc00400600713233225980099b910070028acc004cdc78038014400600c807a26600a00a60280088078dd718070009bab300f0013010001403c297adef6c60911194c0040060090034004444b30010028800c4ca60020093015003cc004dd71808800cdd69809000c0090052008301300240492232330010013758602060226022602260226022602260226022601c6ea800c896600200314a115980099b8f375c602200200714a313300200230120014034808122259800980318069baa0088acc004cc00401402e33001003a519112cc004006266e1c00920028a50403c80122c80622b30013300100500b8cc00400e946444b3001001899b8700248006294100f20048b20184030300a375400a6eb8c030c028dd5001c590080c020004c010dd5004452689b2b20041",
+      "hash": "32e39f6610808c340b7de42fbab42ea9c10f0b5fa7211bf069903cdc"
+    },
+    {
+      "title": "subscription.subscription.spend",
+      "datum": {
+        "title": "datum_opt",
+        "schema": {
+          "$ref": "#/definitions/blockhost~1types~1SubscriptionDatum"
+        }
+      },
+      "redeemer": {
+        "title": "redeemer",
+        "schema": {
+          "$ref": "#/definitions/blockhost~1types~1SubscriptionRedeemer"
+        }
+      },
+      "parameters": [
+        {
+          "title": "server_key_hash",
+          "schema": {
+            "$ref": "#/definitions/aiken~1crypto~1VerificationKeyHash"
+          }
+        },
+        {
+          "title": "_service_address_key_hash",
+          "schema": {
+            "$ref": "#/definitions/aiken~1crypto~1VerificationKeyHash"
+          }
+        }
+      ],
+      "compiledCode": "5904390101002229800aba2aba1aba0aab9faab9eaab9dab9a9bae0039bae00248888888896600264653001300a00198051805800cdc3a4005300a0024888966002600460146ea800e33001300b3754007370e90024dc3a4001300a375400891111991192cc004c0140122b3001301237540170018b20268acc004c0240122b3001301237540170018b20268acc004c0180122b3001301237540170018b20268acc004cdc3a400c0091323259800980c001400e2c80a8dd7180b00098091baa00b8b2020404080810100acc004c010c040dd5000c66002602860226ea80064602a602c602c0032232330010013758602e6030603060306030603060306030603060286ea800c896600200314a115980099b8f375c603000200714a31330020023019001404c80b260206ea80292222598009804000c4cc00802c04a2b3001300c0018998010059bae3003301537540091598009804800c566002660040166eb8c00cc054dd500244c8c9660026014602c6ea8006264b3001300b301737540031325980099b87375a603860326ea8004dd6980e180c9baa0088acc004cdc79bae3007301937540026eb8c01cc064dd500445660026466ebcc004c068dd50011800980d1baa0092301d301e301e301e301e0018acc004c8cdc79bae3001301a37540046eb8c004c068dd50049180e980f180f180f180f180f000c5660026466e24dd69800980d1baa009375a600260346ea80088c074c078c078c078006266e24dd69802180c9baa008375a600860326ea800629410174528202e8a50405d14a080ba2941017180d980c1baa0018b202c32598009806180b9baa0018992cc004c030c060dd5000c4c8c8c8c8c8c8ca60026eb8c08c0066eb4c08c01e6eb4c08c01a6eb8c08c0166eb4c08c0126eb8c08c009222222598009815003c4c9660026034604c6ea8006264646644b3001302f003899ba548000cc0b404d2f5c11640b06eb8c0b0004dd71816001181600098139baa0018b204a30290098b204e1811800981100098108009810000980f800980f000980c9baa0018b202e301b3018375400314c0103d87a80004058600a602e6ea8c068c05cdd5000c5901519192cc004c02cc05cdd5000c4c8cc00cdd61803980c9baa00f23375e603a60346ea8004008c06cc060dd51801980c1baa301b30183754003164058660026eb0c068c05cdd5006919baf301b3018375400201244646600200200644b30010018a60103d87a80008992cc004c010006266e9520003301d0014bd7044cc00c00cc07c009019180e800a03623019301a0018b20268992cc004cc00c03004e264660020026eb0c014c05cdd5006912cc00400629422b300132598009808180c1baa001899b8f375c603860326ea80040122941017180d980c1baa301b30183754603600314a3133002002301c001405880ca2c80a0dd7180c180a9baa00e404c809901322c8078c048010c048c04c011164024300a00130053754015149a26cac80181",
+      "hash": "c1f9217c91b3b6235cf669543f4d290a8b210ec1ce57b1c2ab119943"
+    },
+    {
+      "title": "subscription.subscription.else",
+      "redeemer": {
+        "schema": {}
+      },
+      "parameters": [
+        {
+          "title": "server_key_hash",
+          "schema": {
+            "$ref": "#/definitions/aiken~1crypto~1VerificationKeyHash"
+          }
+        },
+        {
+          "title": "_service_address_key_hash",
+          "schema": {
+            "$ref": "#/definitions/aiken~1crypto~1VerificationKeyHash"
+          }
+        }
+      ],
+      "compiledCode": "5904390101002229800aba2aba1aba0aab9faab9eaab9dab9a9bae0039bae00248888888896600264653001300a00198051805800cdc3a4005300a0024888966002600460146ea800e33001300b3754007370e90024dc3a4001300a375400891111991192cc004c0140122b3001301237540170018b20268acc004c0240122b3001301237540170018b20268acc004c0180122b3001301237540170018b20268acc004cdc3a400c0091323259800980c001400e2c80a8dd7180b00098091baa00b8b2020404080810100acc004c010c040dd5000c66002602860226ea80064602a602c602c0032232330010013758602e6030603060306030603060306030603060286ea800c896600200314a115980099b8f375c603000200714a31330020023019001404c80b260206ea80292222598009804000c4cc00802c04a2b3001300c0018998010059bae3003301537540091598009804800c566002660040166eb8c00cc054dd500244c8c9660026014602c6ea8006264b3001300b301737540031325980099b87375a603860326ea8004dd6980e180c9baa0088acc004cdc79bae3007301937540026eb8c01cc064dd500445660026466ebcc004c068dd50011800980d1baa0092301d301e301e301e301e0018acc004c8cdc79bae3001301a37540046eb8c004c068dd50049180e980f180f180f180f180f000c5660026466e24dd69800980d1baa009375a600260346ea80088c074c078c078c078006266e24dd69802180c9baa008375a600860326ea800629410174528202e8a50405d14a080ba2941017180d980c1baa0018b202c32598009806180b9baa0018992cc004c030c060dd5000c4c8c8c8c8c8c8ca60026eb8c08c0066eb4c08c01e6eb4c08c01a6eb8c08c0166eb4c08c0126eb8c08c009222222598009815003c4c9660026034604c6ea8006264646644b3001302f003899ba548000cc0b404d2f5c11640b06eb8c0b0004dd71816001181600098139baa0018b204a30290098b204e1811800981100098108009810000980f800980f000980c9baa0018b202e301b3018375400314c0103d87a80004058600a602e6ea8c068c05cdd5000c5901519192cc004c02cc05cdd5000c4c8cc00cdd61803980c9baa00f23375e603a60346ea8004008c06cc060dd51801980c1baa301b30183754003164058660026eb0c068c05cdd5006919baf301b3018375400201244646600200200644b30010018a60103d87a80008992cc004c010006266e9520003301d0014bd7044cc00c00cc07c009019180e800a03623019301a0018b20268992cc004cc00c03004e264660020026eb0c014c05cdd5006912cc00400629422b300132598009808180c1baa001899b8f375c603860326ea80040122941017180d980c1baa301b30183754603600314a3133002002301c001405880ca2c80a0dd7180c180a9baa00e404c809901322c8078c048010c048c04c011164024300a00130053754015149a26cac80181",
+      "hash": "c1f9217c91b3b6235cf669543f4d290a8b210ec1ce57b1c2ab119943"
+    }
+  ],
+  "definitions": {
+    "ByteArray": {
+      "dataType": "bytes"
+    },
+    "Int": {
+      "dataType": "integer"
+    },
+    "aiken/crypto/ScriptHash": {
+      "title": "ScriptHash",
+      "dataType": "bytes"
+    },
+    "aiken/crypto/VerificationKeyHash": {
+      "title": "VerificationKeyHash",
+      "dataType": "bytes"
+    },
+    "blockhost/types/AssetId": {
+      "title": "AssetId",
+      "description": "Payment asset identifier (policy_id + asset_name)",
+      "anyOf": [
+        {
+          "title": "AssetId",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": [
+            {
+              "title": "policy_id",
+              "$ref": "#/definitions/cardano~1assets~1PolicyId"
+            },
+            {
+              "title": "asset_name",
+              "$ref": "#/definitions/ByteArray"
+            }
+          ]
+        }
+      ]
+    },
+    "blockhost/types/BeaconRedeemer": {
+      "title": "BeaconRedeemer",
+      "description": "Beacon minting policy redeemers",
+      "anyOf": [
+        {
+          "title": "CreateSubscription",
+          "description": "Mint beacon when subscription is created",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": []
+        },
+        {
+          "title": "CloseSubscription",
+          "description": "Burn beacon when subscription is consumed/cancelled",
+          "dataType": "constructor",
+          "index": 1,
+          "fields": []
+        }
+      ]
+    },
+    "blockhost/types/NftRedeemer": {
+      "title": "NftRedeemer",
+      "description": "NFT minting policy redeemers",
+      "anyOf": [
+        {
+          "title": "MintNft",
+          "description": "Mint a new NFT (user token + CIP-68 reference token)",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": []
+        },
+        {
+          "title": "BurnNft",
+          "description": "Burn NFT",
+          "dataType": "constructor",
+          "index": 1,
+          "fields": []
+        }
+      ]
+    },
+    "blockhost/types/SubscriptionDatum": {
+      "title": "SubscriptionDatum",
+      "description": "Subscription datum — stored in each subscriber's UTXO at the validator address",
+      "anyOf": [
+        {
+          "title": "SubscriptionDatum",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": [
+            {
+              "title": "plan_id",
+              "description": "Plan identifier (maps to off-chain plan config)",
+              "$ref": "#/definitions/Int"
+            },
+            {
+              "title": "expiry",
+              "description": "Expiration timestamp (POSIX milliseconds)",
+              "$ref": "#/definitions/Int"
+            },
+            {
+              "title": "subscriber_key_hash",
+              "description": "Subscriber's payment address key hash (for refund verification)",
+              "$ref": "#/definitions/ByteArray"
+            },
+            {
+              "title": "amount_paid",
+              "description": "Amount of payment token locked",
+              "$ref": "#/definitions/Int"
+            },
+            {
+              "title": "payment_asset",
+              "description": "What token was used for payment",
+              "$ref": "#/definitions/blockhost~1types~1AssetId"
+            },
+            {
+              "title": "beacon_policy_id",
+              "description": "Beacon minting policy hash (for cross-referencing)",
+              "$ref": "#/definitions/ByteArray"
+            },
+            {
+              "title": "user_encrypted",
+              "description": "ECIES-encrypted connection details (for the server to decrypt)",
+              "$ref": "#/definitions/ByteArray"
+            }
+          ]
+        }
+      ]
+    },
+    "blockhost/types/SubscriptionRedeemer": {
+      "title": "SubscriptionRedeemer",
+      "description": "Subscription validator redeemers",
+      "anyOf": [
+        {
+          "title": "ServiceCollect",
+          "description": "Service collects payment (server-authorized)",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": []
+        },
+        {
+          "title": "SubscriberCancel",
+          "description": "Subscriber cancels and reclaims funds",
+          "dataType": "constructor",
+          "index": 1,
+          "fields": []
+        },
+        {
+          "title": "SubscriberExtend",
+          "description": "Subscriber extends (spend-and-recreate with more funds)",
+          "dataType": "constructor",
+          "index": 2,
+          "fields": []
+        },
+        {
+          "title": "Migrate",
+          "description": "Server migrates UTXO to a new validator (upgrade path)",
+          "dataType": "constructor",
+          "index": 3,
+          "fields": [
+            {
+              "title": "new_validator_hash",
+              "$ref": "#/definitions/ByteArray"
+            }
+          ]
+        }
+      ]
+    },
+    "cardano/assets/PolicyId": {
+      "title": "PolicyId",
+      "dataType": "bytes"
+    }
+  }
+}
