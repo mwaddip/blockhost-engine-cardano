@@ -1,0 +1,11 @@
+node_modules/
+dist/
+build/
+*.js
+*.d.ts
+*.js.map
+!engine.json
+.env
+*.key
+*.secret
+target/

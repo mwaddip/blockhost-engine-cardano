@@ -1,0 +1,22 @@
+{
+  "name": "cardano",
+  "version": "0.1.0",
+  "display_name": "Cardano",
+  "accent_color": "#0033AD",
+  "setup": {
+    "first_boot_hook": "/usr/share/blockhost/engine-hooks/first-boot.sh",
+    "wizard_module": "blockhost.engine_cardano.wizard",
+    "finalization_steps": ["wallet", "contracts", "chain_config"],
+    "post_finalization_steps": ["mint_nft", "plan", "revenue_share"]
+  },
+  "config_keys": {
+    "session_key": "blockchain"
+  },
+  "constraints": {
+    "address_pattern": "^(addr1[a-z0-9]{53,}|addr_test1[a-z0-9]{53,}|[0-9a-fA-F]{56})$",
+    "native_token": "ada",
+    "native_token_label": "ADA",
+    "token_pattern": "^[0-9a-fA-F]{56}(\\.[0-9a-fA-F]+)?$",
+    "address_placeholder": "addr1..."
+  }
+}
