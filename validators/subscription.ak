@@ -42,11 +42,11 @@ fn get_inline_datum(output: Output) -> Option<SubscriptionDatum> {
 /// Uses tx validity lower bound as the "current" slot (trustless — the node
 /// guarantees the tx can only be included at or after this slot).
 fn elapsed_intervals(datum: SubscriptionDatum, tx_lower_slot: Int) -> Int {
-  let elapsed_slots = tx_lower_slot - datum.last_collected_slot
+  let elapsed_slots = tx_lower_slot - datum.last_collected
   if elapsed_slots <= 0 {
     0
   } else {
-    elapsed_slots / datum.interval_slots
+    elapsed_slots / datum.interval_ms
   }
 }
 
@@ -92,34 +92,42 @@ validator subscription(
     when redeemer is {
       // Server collects earned payment — partial collection, UTXO continues
       ServiceCollect -> {
+        trace @"SC:1 check signed"
         expect signed_by(tx, server_key_hash)
-        // Tx must have a lower validity bound (trustless time reference)
+        trace @"SC:2 check lower_bound"
         expect Some(current_slot) = tx_lower_bound(tx)
+        trace @"SC:3 calc earned"
         let earned = claimable_amount(datum, current_slot)
-        // Must have something to claim
+        trace @"SC:4 check earned > 0"
         expect earned > 0
-        // Must find a continuing output with updated datum
+        trace @"SC:5 find continuing output"
         expect Some(continuing_output) = find_continuing_output(tx, own_ref)
+        trace @"SC:6 get inline datum"
         expect Some(new_datum) = get_inline_datum(continuing_output)
-        // Updated slot for next collection
+        trace @"SC:7 calc new_last_collected"
         let intervals = elapsed_intervals(datum, current_slot)
         let new_last_collected =
-          datum.last_collected_slot + intervals * datum.interval_slots
-        // Validate the continuing output datum
-        and {
-          new_datum.plan_id == datum.plan_id,
-          new_datum.expiry_slot == datum.expiry_slot,
-          new_datum.subscriber_key_hash == datum.subscriber_key_hash,
-          new_datum.rate_per_interval == datum.rate_per_interval,
-          new_datum.interval_slots == datum.interval_slots,
-          new_datum.payment_asset == datum.payment_asset,
-          new_datum.beacon_policy_id == datum.beacon_policy_id,
-          new_datum.user_encrypted == datum.user_encrypted,
-          // Amount reduced by exactly what was earned
-          new_datum.amount_remaining == datum.amount_remaining - earned,
-          // Collection timestamp advanced
-          new_datum.last_collected_slot == new_last_collected,
-        }
+          datum.last_collected + intervals * datum.interval_ms
+        trace @"SC:8a plan_id"
+        expect new_datum.plan_id == datum.plan_id
+        trace @"SC:8b expiry_slot"
+        expect new_datum.expiry == datum.expiry
+        trace @"SC:8c subscriber_key_hash"
+        expect new_datum.subscriber_key_hash == datum.subscriber_key_hash
+        trace @"SC:8d rate_per_interval"
+        expect new_datum.rate_per_interval == datum.rate_per_interval
+        trace @"SC:8e interval_slots"
+        expect new_datum.interval_ms == datum.interval_ms
+        trace @"SC:8f payment_asset"
+        expect new_datum.payment_asset == datum.payment_asset
+        trace @"SC:8g beacon_policy_id"
+        expect new_datum.beacon_policy_id == datum.beacon_policy_id
+        trace @"SC:8h user_encrypted"
+        expect new_datum.user_encrypted == datum.user_encrypted
+        trace @"SC:8i amount_remaining"
+        expect new_datum.amount_remaining == datum.amount_remaining - earned
+        trace @"SC:8j last_collected_slot"
+        new_datum.last_collected == new_last_collected
       }
 
       // Subscriber cancels — fair split: earned to service, remainder to subscriber
@@ -181,11 +189,11 @@ validator subscription(
           new_datum.payment_asset == datum.payment_asset,
           new_datum.beacon_policy_id == datum.beacon_policy_id,
           new_datum.rate_per_interval == datum.rate_per_interval,
-          new_datum.interval_slots == datum.interval_slots,
-          new_datum.last_collected_slot == datum.last_collected_slot,
+          new_datum.interval_ms == datum.interval_ms,
+          new_datum.last_collected == datum.last_collected,
           // Can only increase
           new_datum.amount_remaining >= datum.amount_remaining,
-          new_datum.expiry_slot >= datum.expiry_slot,
+          new_datum.expiry >= datum.expiry,
         }
       }
 

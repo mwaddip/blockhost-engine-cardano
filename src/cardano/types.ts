@@ -5,15 +5,17 @@
 
 // ── Datum structures ─────────────────────────────────────────────────
 
-/** Subscription datum stored at the validator UTXO */
+/** Subscription datum stored at the validator UTXO.
+ *  All time fields use POSIX milliseconds (not slot numbers) because
+ *  the on-chain validity range is expressed in POSIX time. */
 export interface SubscriptionDatum {
   planId: number;
-  expirySlot: bigint;        // absolute slot number — subscription ends here
+  expiry: bigint;            // POSIX ms — subscription ends here
   subscriber: string;        // subscriber payment key hash (hex)
   amountRemaining: bigint;   // payment token amount still in the UTXO
   ratePerInterval: bigint;   // cost per collection interval in token base units
-  intervalSlots: bigint;     // collection interval in slots (86400 = ~1 day)
-  lastCollectedSlot: bigint; // slot of last collection (or creation)
+  intervalMs: bigint;        // collection interval in milliseconds (86_400_000 = 1 day)
+  lastCollected: bigint;     // POSIX ms of last collection (or creation)
   paymentAsset: AssetId;     // policy + name
   beaconId: string;          // beacon minting policy hash (hex)
   userEncrypted: string;     // hex-encoded encrypted data

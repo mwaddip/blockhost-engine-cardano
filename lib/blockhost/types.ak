@@ -7,21 +7,25 @@ pub type AssetId {
 }
 
 /// Subscription datum — stored in each subscriber's UTXO at the validator address
+///
+/// All time fields use POSIX milliseconds (not slot numbers) because the
+/// validator's validity_range is expressed in POSIX time. Slot numbers are
+/// not available in the script context.
 pub type SubscriptionDatum {
   /// Plan identifier (maps to off-chain plan config)
   plan_id: Int,
-  /// Expiration slot (absolute slot number — subscription ends at this slot)
-  expiry_slot: Int,
+  /// Expiration time (POSIX milliseconds — subscription ends at this time)
+  expiry: Int,
   /// Subscriber's payment address key hash (for refund verification)
   subscriber_key_hash: ByteArray,
   /// Amount of payment token currently remaining in this UTXO
   amount_remaining: Int,
   /// Cost per collection interval in payment token base units
   rate_per_interval: Int,
-  /// Collection interval in slots (e.g. 86400 = ~1 day)
-  interval_slots: Int,
-  /// Slot of the last partial collection (or subscription creation)
-  last_collected_slot: Int,
+  /// Collection interval in milliseconds (e.g. 86_400_000 = 1 day)
+  interval_ms: Int,
+  /// POSIX ms of the last partial collection (or subscription creation)
+  last_collected: Int,
   /// What token was used for payment
   payment_asset: AssetId,
   /// Beacon minting policy hash (for cross-referencing)
