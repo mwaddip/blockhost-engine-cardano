@@ -18,18 +18,17 @@ import {
   handleSubscriptionRemoved,
 } from "../handlers/index.js";
 import { runReconciliation as reconcileNftOwnership } from "../reconcile/index.js";
+import { runFundManager, shouldRunFundCycle, isProvisioningInProgress } from "../fund-manager/index.js";
 
 // ── Intervals ─────────────────────────────────────────────────────────────────
 
 const POLL_INTERVAL_MS = 30_000;        // 30 seconds between beacon scans
 const RECONCILE_INTERVAL_MS = 3_600_000; // 1 hour
-const FUND_CYCLE_INTERVAL_MS = 86_400_000; // 24 hours
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
 let running = true;
 let lastReconcile = 0;
-let lastFundCycle = 0;
 
 // ── Periodic tasks ────────────────────────────────────────────────────────────
 
@@ -40,11 +39,13 @@ async function runReconciliation(
   await reconcileNftOwnership(client, nftPolicyId);
 }
 
-async function runFundCycle(
-  _client: BlockFrostAPI,
-): Promise<void> {
-  // TODO (Phase 5 Fund Manager): withdraw funds, distribute revenue shares
-  console.log("[MONITOR] Fund cycle complete (stub).");
+async function runFundCycle(): Promise<void> {
+  if (!shouldRunFundCycle()) return;
+  if (isProvisioningInProgress()) {
+    console.log("[MONITOR] Provisioning in progress, deferring fund cycle");
+    return;
+  }
+  await runFundManager();
 }
 
 // ── Core poll loop ────────────────────────────────────────────────────────────
@@ -99,15 +100,11 @@ async function poll(
         lastReconcile = now;
       }
 
-      // Periodic fund cycle (every 24 hours)
-      if (now - lastFundCycle >= FUND_CYCLE_INTERVAL_MS) {
-        console.log("[MONITOR] Running fund cycle...");
-        try {
-          await runFundCycle(client);
-        } catch (err) {
-          console.error(`[MONITOR] Fund cycle error: ${err}`);
-        }
-        lastFundCycle = now;
+      // Periodic fund cycle (interval managed by fund-manager state)
+      try {
+        await runFundCycle();
+      } catch (err) {
+        console.error(`[MONITOR] Fund cycle error: ${err}`);
       }
     } catch (err) {
       console.error(`[MONITOR] Poll error: ${err}`);
@@ -160,12 +157,10 @@ async function main(): Promise<void> {
   console.log(`Beacon policy:    ${config.beaconPolicyId}`);
   console.log(`Poll interval:    ${POLL_INTERVAL_MS / 1000}s`);
   console.log(`Reconcile every:  ${RECONCILE_INTERVAL_MS / 3_600_000}h`);
-  console.log(`Fund cycle every: ${FUND_CYCLE_INTERVAL_MS / 3_600_000}h`);
   console.log("----------------------------------------------\n");
 
-  // Start timers from now so the first periodic task fires on schedule
+  // Start reconcile timer from now so first reconcile fires on schedule
   lastReconcile = Date.now();
-  lastFundCycle = Date.now();
 
   console.log("Monitor is running. Press Ctrl+C to stop.\n");
   await poll(client, config.subscriptionValidatorAddress, config.beaconPolicyId, config.nftPolicyId);
