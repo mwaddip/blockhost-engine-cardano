@@ -18,10 +18,12 @@
     "@lucid-evolution/provider": "^0.1.90",
     "@meshsdk/core": "^1.8.14",
     "@noble/curves": "^1.8.0",
+    "@noble/ed25519": "^3.0.0",
     "@noble/hashes": "^1.7.0",
     "@stricahq/bip32ed25519": "^1.1.0",
     "bech32": "^2.0.0",
     "bip39": "^3.1.0",
+    "cbor": "^10.0.12",
     "js-yaml": "^4.1.1"
   },
   "devDependencies": {

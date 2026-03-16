@@ -22,18 +22,18 @@
  *   P9: Auth boundary — validate every input, trust nothing from the network.
  *   E8: Long-running daemon — must not crash, must not leak.
  *
- * TODO: Full COSE_Sign1 + Ed25519 cryptographic verification.
- *   Steps 3-5 below require cbor/cose libraries not yet available in the bundle:
- *     3. Parse COSE_Sign1 structure and verify the protected headers
- *     4. Extract the Ed25519 public key from the COSE_Key structure
- *     5. Verify the Ed25519 signature over COSE SigStructure bytes
- *   Currently: OTP timing-safe compare + field validation. Crypto verification deferred.
+ * Cryptographic verification:
+ *   COSE_Sign1 Ed25519 signatures are verified before writing .sig files.
+ *   The verification is a safety check (not forged garbage), not an identity
+ *   check — the PAM plugin handles identity binding.
  */
 
 import * as https from "node:https";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { timingSafeEqual } from "node:crypto";
+import * as cbor from "cbor";
+import { verifyAsync as ed25519Verify } from "@noble/ed25519";
 
 // ── Constants ──────────────────────────────────────────────────────────
 
@@ -236,12 +236,11 @@ interface CardanoSigFile {
  * Error strings are safe to log but must NOT be returned to the client
  * (they may reveal internal state).
  *
- * Cryptographic verification of the COSE_Sign1 structure is deferred — the
- * PAM verifier plugin performs full Ed25519 verification when it reads the
- * .sig file. The auth-svc validates OTP timing-safe and ensures structural
- * integrity of the hex fields before writing.
+ * Performs full COSE_Sign1 Ed25519 cryptographic verification before writing.
+ * This is a safety check (signature not forged), not an identity check —
+ * the PAM plugin handles identity binding.
  */
-function validateAndWriteSig(sessionId: string, payload: CallbackPayload): string | null {
+async function validateAndWriteSig(sessionId: string, payload: CallbackPayload): Promise<string | null> {
   // First-claim-wins: prevent overwrite of existing .sig
   const sigPath = path.join(PENDING_DIR, `${sessionId}.sig`);
   if (fs.existsSync(sigPath)) return "session already processed";
@@ -258,13 +257,87 @@ function validateAndWriteSig(sessionId: string, payload: CallbackPayload): strin
 
   if (payload.machineId !== session.machine_id) return "machine_id mismatch";
 
-  // TODO: Full COSE_Sign1 cryptographic verification (deferred — needs cbor/cose libs):
-  //   1. CBOR-decode payload.signature as COSE_Sign1 array
-  //   2. Verify protected header contains alg=-8 (EdDSA)
-  //   3. CBOR-decode payload.key as COSE_Key, extract crv=Ed25519, x=public_key_bytes
-  //   4. Reconstruct Sig_Structure: ["Signature1", protected, b"", payload_bytes]
-  //      where payload_bytes = UTF-8("Authenticate to {machineId} with code: {otp}")
-  //   5. Verify Ed25519 signature over CBOR(Sig_Structure) using extracted public key
+  // ── COSE_Sign1 Ed25519 Verification ──────────────────────────────
+  // CIP-30 signData returns { signature: hex(COSE_Sign1), key: hex(COSE_Key) }
+  // We verify the Ed25519 signature is valid over the COSE Sig_structure,
+  // and that the signed payload matches the expected OTP message.
+  try {
+    const sigBytes = Buffer.from(payload.signature, "hex");
+    const keyBytes = Buffer.from(payload.key, "hex");
+
+    // 1. Decode COSE_Sign1: [protected_headers, unprotected_headers, payload, signature]
+    const coseSign1: unknown = cbor.decodeFirstSync(sigBytes);
+    if (!Array.isArray(coseSign1) || coseSign1.length !== 4) {
+      return "COSE_Sign1: invalid structure";
+    }
+
+    const [protectedHeaders, , cosePayload, signatureRaw] = coseSign1 as [
+      Buffer, unknown, Buffer, Buffer
+    ];
+
+    // Validate protected headers contain alg: EdDSA (-8)
+    const protectedMap: unknown = cbor.decodeFirstSync(protectedHeaders);
+    if (!(protectedMap instanceof Map)) {
+      return "COSE_Sign1: protected headers not a map";
+    }
+    const alg = protectedMap.get(1);
+    if (alg !== -8) {
+      return "COSE_Sign1: unexpected algorithm (expected EdDSA/-8)";
+    }
+
+    // 2. Decode COSE_Key and extract Ed25519 public key
+    const coseKey: unknown = cbor.decodeFirstSync(keyBytes);
+    if (!(coseKey instanceof Map)) {
+      return "COSE_Key: not a map";
+    }
+    // kty=1 (OKP), alg=-8 (EdDSA), crv=6 (Ed25519), -2=x (public key bytes)
+    if (coseKey.get(1) !== 1) return "COSE_Key: unexpected key type (expected OKP/1)";
+    if (coseKey.get(3) !== -8) return "COSE_Key: unexpected algorithm (expected EdDSA/-8)";
+    if (coseKey.get(-1) !== 6) return "COSE_Key: unexpected curve (expected Ed25519/6)";
+
+    const publicKeyRaw = coseKey.get(-2);
+    if (!(publicKeyRaw instanceof Uint8Array) || publicKeyRaw.length !== 32) {
+      return "COSE_Key: missing or invalid public key bytes";
+    }
+
+    // 3. Verify the payload matches the expected OTP message
+    const expectedMsg = `Authenticate to ${payload.machineId} with code: ${payload.otp}`;
+    const expectedBytes = Buffer.from(expectedMsg, "utf8");
+    const payloadBuf = Buffer.from(cosePayload);
+    if (!payloadBuf.equals(expectedBytes)) {
+      return "COSE_Sign1: payload does not match expected OTP message";
+    }
+
+    // 4. Build the Sig_structure for verification:
+    //    ["Signature1", protected_headers_bytes, external_aad (empty), payload_bytes]
+    const sigStructure = [
+      "Signature1",
+      Buffer.from(protectedHeaders),
+      Buffer.alloc(0),
+      payloadBuf,
+    ];
+    const sigStructureEncoded = cbor.encode(sigStructure) as Buffer;
+
+    // 5. Verify Ed25519 signature over the CBOR-encoded Sig_structure
+    const signatureBuf = new Uint8Array(signatureRaw);
+    if (signatureBuf.length !== 64) {
+      return "COSE_Sign1: signature must be 64 bytes";
+    }
+
+    const valid = await ed25519Verify(
+      signatureBuf,
+      new Uint8Array(sigStructureEncoded),
+      new Uint8Array(publicKeyRaw),
+    );
+
+    if (!valid) {
+      return "COSE_Sign1: Ed25519 signature verification failed";
+    }
+  } catch (err) {
+    // P9: catch all crypto/CBOR errors — don't leak internals
+    const detail = err instanceof Error ? err.message : String(err);
+    return `COSE verification error: ${detail}`;
+  }
 
   // Build structured .sig content
   const sigContent: CardanoSigFile = {
@@ -361,7 +434,7 @@ function handlePostCallback(
     chunks.push(chunk);
   });
 
-  req.on("end", () => {
+  req.on("end", async () => {
     if (aborted) return;
 
     const body = Buffer.concat(chunks).toString("utf8").trim();
@@ -372,7 +445,7 @@ function handlePostCallback(
       return;
     }
 
-    const error = validateAndWriteSig(sessionId, payload);
+    const error = await validateAndWriteSig(sessionId, payload);
 
     if (error === null) {
       sendResponse(res, 200, "OK");
