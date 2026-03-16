@@ -48,12 +48,12 @@ function decodeSubscriptionDatum(cborHex: string): SubscriptionDatum | null {
     const paymentAssetConstr = f[7] as Constr<string>;
     return {
       planId: Number(f[0] as bigint),
-      expirySlot: f[1] as bigint,
+      expiry: f[1] as bigint,
       subscriber: f[2] as string,
       amountRemaining: f[3] as bigint,
       ratePerInterval: f[4] as bigint,
-      intervalSlots: f[5] as bigint,
-      lastCollectedSlot: f[6] as bigint,
+      intervalMs: f[5] as bigint,
+      lastCollected: f[6] as bigint,
       paymentAsset: {
         policyId: paymentAssetConstr.fields[0] as string,
         assetName: paymentAssetConstr.fields[1] as string,
@@ -72,12 +72,12 @@ function decodeSubscriptionDatum(cborHex: string): SubscriptionDatum | null {
 function encodeSubscriptionDatum(datum: SubscriptionDatum): string {
   const d = new Constr(0, [
     BigInt(datum.planId),
-    datum.expirySlot,
+    datum.expiry,
     datum.subscriber,
     datum.amountRemaining,
     datum.ratePerInterval,
-    datum.intervalSlots,
-    datum.lastCollectedSlot,
+    datum.intervalMs,
+    datum.lastCollected,
     new Constr(0, [datum.paymentAsset.policyId, datum.paymentAsset.assetName]),
     datum.beaconId,
     datum.userEncrypted,
@@ -98,22 +98,26 @@ interface ClaimableInfo {
   fullyConsumed: boolean;
 }
 
+/**
+ * Analyze a subscription UTXO for claimability.
+ * @param validFromMs POSIX ms that will be used as tx validFrom (= what the validator sees as tx_lower_bound)
+ */
 function analyzeClaimable(
   utxo: UTxO,
-  currentSlot: bigint,
+  validFromMs: bigint,
 ): ClaimableInfo | null {
   if (!utxo.datum) return null;
   const datum = decodeSubscriptionDatum(utxo.datum);
   if (!datum) return null;
 
-  // Expired subscriptions can't be collected via ServiceCollect
-  if (currentSlot >= datum.expirySlot) return null;
+  // Skip fully consumed subscriptions (nothing left to collect)
+  if (datum.amountRemaining <= 0n) return null;
 
   // How many full intervals since last collection?
-  const elapsed = currentSlot - datum.lastCollectedSlot;
-  if (elapsed < datum.intervalSlots) return null; // not yet claimable
+  const elapsed = validFromMs - datum.lastCollected;
+  if (elapsed < datum.intervalMs) return null; // not yet claimable
 
-  const intervals = elapsed / datum.intervalSlots;
+  const intervals = elapsed / datum.intervalMs;
   let collectAmount = intervals * datum.ratePerInterval;
 
   // Cap at amount remaining
@@ -234,12 +238,14 @@ export async function executeWithdraw(
     return;
   }
 
-  // Analyze claimability
-  const currentSlot = BigInt(lucid.currentSlot());
+  // Analyze claimability using a validFrom time 15s in the past.
+  // This same value will be used for the tx's validFrom — the validator
+  // sees it as tx_lower_bound and uses it for interval calculation.
+  const validFromMs = BigInt(Date.now()) - 15_000n;
   const claimable: ClaimableInfo[] = [];
 
   for (const utxo of utxos) {
-    const info = analyzeClaimable(utxo, currentSlot);
+    const info = analyzeClaimable(utxo, validFromMs);
     if (info) claimable.push(info);
   }
 
@@ -293,9 +299,8 @@ export async function executeWithdraw(
   let beaconBurns: Record<string, bigint> = {};
   let hasBeaconBurns = false;
 
-  // Set validity range — current slot minus some slack to current slot plus some slack
-  const now = Date.now();
-  tx = tx.validFrom(now - 60_000).validTo(now + 600_000);
+  // Set validity range — validFromMs must match what we used for interval calculations
+  tx = tx.validFrom(Number(validFromMs)).validTo(Date.now() + 600_000);
 
   // Add signer
   tx = tx.addSignerKey(serverKeyHash);
@@ -314,9 +319,9 @@ export async function executeWithdraw(
       const updatedDatum: SubscriptionDatum = {
         ...info.datum,
         amountRemaining: info.datum.amountRemaining - info.collectAmount,
-        lastCollectedSlot:
-          info.datum.lastCollectedSlot +
-          info.intervals * info.datum.intervalSlots,
+        lastCollected:
+          info.datum.lastCollected +
+          info.intervals * info.datum.intervalMs,
       };
 
       const datumCbor = encodeSubscriptionDatum(updatedDatum);
