@@ -5,6 +5,7 @@ build/
 *.d.ts
 *.js.map
 !engine.json
+!auth-svc/signing-page/engine.js
 .env
 *.key
 *.secret
