@@ -1,0 +1,254 @@
+#!/usr/bin/env python3
+"""
+Generate the static signup page HTML for BlockHost (Cardano engine).
+
+Reads configuration from blockhost.yaml and web3-defaults.yaml, fills
+template placeholders, and writes a self-contained HTML file.
+
+Usage:
+    generate-signup-page [--output signup.html]
+    generate-signup-page --config /etc/blockhost/blockhost.yaml \\
+                         --web3-config /etc/blockhost/web3-defaults.yaml \\
+                         --output /var/www/html/signup.html
+    generate-signup-page --serve 8080   # generate then serve on port 8080
+"""
+
+import argparse
+import http.server
+import json
+import os
+import shutil
+import socket
+import socketserver
+import sys
+import yaml
+from pathlib import Path
+
+# ── Default paths ─────────────────────────────────────────────────────
+
+DEFAULT_CONFIG = '/etc/blockhost/blockhost.yaml'
+DEFAULT_WEB3_CONFIG = '/etc/blockhost/web3-defaults.yaml'
+DEFAULT_OUTPUT = 'signup.html'
+
+SCRIPT_DIR = Path(__file__).parent
+
+TEMPLATE_LOCATIONS = [
+    SCRIPT_DIR / 'signup-template.html',               # development (repo)
+    Path('/usr/share/blockhost/signup-template.html'),  # installed
+]
+
+ENGINE_JS_LOCATIONS = [
+    SCRIPT_DIR / 'signup-engine.js',                   # development (repo)
+    Path('/usr/share/blockhost/signup-engine.js'),      # installed
+]
+
+ENGINE_JSON_LOCATIONS = [
+    SCRIPT_DIR.parent / 'engine.json',                 # development (repo root)
+    Path('/usr/share/blockhost/engine.json'),           # installed
+]
+
+
+# ── File finders ──────────────────────────────────────────────────────
+
+def _find_file(locations: list) -> Path:
+    """Return the first existing path, or the first entry if none exist."""
+    for p in locations:
+        if p.exists():
+            return p
+    return locations[0]
+
+
+def find_template() -> Path:
+    return _find_file(TEMPLATE_LOCATIONS)
+
+
+# ── Config loading ────────────────────────────────────────────────────
+
+def load_config(config_path: str, web3_config_path: str) -> dict:
+    """
+    Merge blockhost.yaml + web3-defaults.yaml into a single dict.
+
+    web3-defaults.yaml keys are loaded at the top level and also available
+    under a 'blockchain' sub-key if the file uses that structure.
+    engine.json is consulted for accent_color → primary_color.
+    """
+    config: dict = {}
+
+    if os.path.exists(config_path):
+        with open(config_path) as f:
+            config.update(yaml.safe_load(f) or {})
+    else:
+        print(f'Warning: config file not found: {config_path}', file=sys.stderr)
+
+    if os.path.exists(web3_config_path):
+        with open(web3_config_path) as f:
+            web3 = yaml.safe_load(f) or {}
+            config.update(web3)
+    else:
+        print(f'Warning: web3 config file not found: {web3_config_path}', file=sys.stderr)
+
+    # Pull accent_color from engine.json as fallback for primary_color
+    engine_json_path = _find_file(ENGINE_JSON_LOCATIONS)
+    if engine_json_path.exists():
+        try:
+            with open(engine_json_path) as f:
+                engine_cfg = json.load(f)
+            accent = engine_cfg.get('accent_color', '')
+            if accent:
+                config.setdefault('primary_color', accent)
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    return config
+
+
+# ── Template rendering ────────────────────────────────────────────────
+
+def generate_page(config: dict, template: str) -> str:
+    """Replace {{PLACEHOLDER}} tokens in the template with config values."""
+
+    bc = config.get('blockchain', {})
+
+    server_public_key = config.get('server_public_key', '')
+    if not server_public_key:
+        print('Error: server_public_key not set in blockhost.yaml. Run blockhost-keygen first.',
+              file=sys.stderr)
+        sys.exit(1)
+
+    replacements = {
+        '{{SERVER_PUBLIC_KEY}}':              server_public_key,
+        '{{PUBLIC_SECRET}}':                  config.get('public_secret', 'blockhost-access'),
+        '{{NFT_POLICY_ID}}':                  bc.get('nft_policy_id', ''),
+        '{{SUBSCRIPTION_VALIDATOR_ADDRESS}}': bc.get('subscription_validator_address', ''),
+        '{{BEACON_POLICY_ID}}':               bc.get('beacon_policy_id', ''),
+        '{{BLOCKFROST_PROJECT_ID}}':          bc.get('blockfrost_project_id', ''),
+        '{{NETWORK}}':                        bc.get('network', 'preprod'),
+        '{{PAGE_TITLE}}':                     config.get('page_title', 'BlockHost - Get Your Server'),
+        '{{PRIMARY_COLOR}}':                  config.get('primary_color', '#0033AD'),
+    }
+
+    result = template
+    for placeholder, value in replacements.items():
+        result = result.replace(placeholder, str(value))
+
+    return result
+
+
+# ── Dev HTTP server (dual-stack) ──────────────────────────────────────
+
+class DualStackHTTPServer(socketserver.TCPServer):
+    """HTTP server that tries IPv6 dual-stack, falls back to IPv4."""
+    allow_reuse_address = True
+
+    def __init__(self, server_address, RequestHandlerClass):
+        try:
+            self.address_family = socket.AF_INET6
+            super().__init__(server_address, RequestHandlerClass)
+            self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        except (OSError, socket.error):
+            self.address_family = socket.AF_INET
+            super().__init__(server_address, RequestHandlerClass)
+
+
+def serve_page(output_path: Path, port: int):
+    directory = output_path.parent
+    filename = output_path.name
+
+    class Handler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=str(directory), **kwargs)
+
+        def do_GET(self):
+            if self.path in ('/', '/' + filename):
+                self.path = '/' + filename
+            super().do_GET()
+
+        def log_message(self, fmt, *args):
+            pass  # silence access log for dev server
+
+    try:
+        server = DualStackHTTPServer(('::', port), Handler)
+        print(f'Serving on http://localhost:{port}/')
+        print(f'             http://[::1]:{port}/')
+    except Exception as e:
+        print(f'Warning: IPv6 failed ({e}), falling back to IPv4', file=sys.stderr)
+        server = http.server.HTTPServer(('0.0.0.0', port), Handler)
+        print(f'Serving on http://0.0.0.0:{port}/')
+
+    print(f'File: {output_path}')
+    print('Press Ctrl+C to stop')
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print('\nShutting down.')
+        server.shutdown()
+
+
+# ── Main ──────────────────────────────────────────────────────────────
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Generate the BlockHost Cardano signup page from template + config.')
+    parser.add_argument('--config', default=DEFAULT_CONFIG,
+                        help=f'blockhost.yaml path (default: {DEFAULT_CONFIG})')
+    parser.add_argument('--web3-config', default=DEFAULT_WEB3_CONFIG,
+                        help=f'web3-defaults.yaml path (default: {DEFAULT_WEB3_CONFIG})')
+    parser.add_argument('--output', '-o', default=DEFAULT_OUTPUT,
+                        help=f'Output HTML file (default: {DEFAULT_OUTPUT})')
+    parser.add_argument('--template',
+                        help='Template HTML file (default: auto-detect)')
+    parser.add_argument('--serve', type=int, metavar='PORT',
+                        help='Start a dev HTTP server on PORT after generating')
+    args = parser.parse_args()
+
+    # Locate template
+    template_path = Path(args.template) if args.template else find_template()
+    if not template_path.exists():
+        print(f'Error: template not found: {template_path}', file=sys.stderr)
+        print('Searched:', file=sys.stderr)
+        for loc in TEMPLATE_LOCATIONS:
+            print(f'  {loc}', file=sys.stderr)
+        sys.exit(1)
+
+    with open(template_path) as f:
+        template = f.read()
+
+    # Load config
+    config = load_config(args.config, args.web3_config)
+
+    # Render
+    html = generate_page(config, template)
+
+    # Write output
+    output_path = Path(args.output).resolve()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, 'w') as f:
+        f.write(html)
+
+    # Copy signup-engine.js next to the output HTML
+    engine_js = _find_file(ENGINE_JS_LOCATIONS)
+    if engine_js.exists():
+        dest = output_path.parent / 'signup-engine.js'
+        if dest.resolve() != engine_js.resolve():
+            shutil.copy2(engine_js, dest)
+            print(f'Copied:    {dest}')
+    else:
+        print(f'Warning: signup-engine.js not found — page will not function',
+              file=sys.stderr)
+
+    bc = config.get('blockchain', {})
+    print(f'Generated: {output_path}')
+    print(f'  network:              {bc.get("network", "preprod")}')
+    print(f'  validatorAddress:     {bc.get("subscription_validator_address", "NOT SET")}')
+    print(f'  beaconPolicyId:       {bc.get("beacon_policy_id", "NOT SET")}')
+    print(f'  blockfrostProjectId:  {bc.get("blockfrost_project_id", "NOT SET")}')
+    pub = config.get('server_public_key', '')
+    print(f'  serverPublicKey:      {(pub[:20] + "...") if pub else "NOT SET"}')
+
+    if args.serve:
+        print()
+        serve_page(output_path, args.serve)
+
+
+if __name__ == '__main__':
+    main()

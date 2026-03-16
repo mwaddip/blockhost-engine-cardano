@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{PAGE_TITLE}}</title>
+    <style>
+        :root {
+            --primary: {{PRIMARY_COLOR}};
+            --primary-dark: color-mix(in srgb, var(--primary) 80%, black);
+            --bg: #0f0f0f;
+            --surface: #1a1a1a;
+            --surface-hover: #252525;
+            --text: #e5e5e5;
+            --text-muted: #888;
+            --border: #333;
+            --success: #22c55e;
+            --error: #ef4444;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 2rem;
+        }
+        .container {
+            max-width: 520px;
+            width: 100%;
+        }
+        h1 {
+            font-size: 1.75rem;
+            margin-bottom: 0.5rem;
+            text-align: center;
+        }
+        h2 {
+            font-size: 1.25rem;
+            margin-bottom: 0.5rem;
+        }
+        .subtitle {
+            color: var(--text-muted);
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1rem;
+        }
+        .step {
+            display: flex;
+            align-items: flex-start;
+            gap: 1rem;
+            margin-bottom: 1.25rem;
+        }
+        .step:only-child { margin-bottom: 0; }
+        .step-number {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background: var(--primary);
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            font-size: 0.875rem;
+            flex-shrink: 0;
+        }
+        .step-number.done { background: var(--success); }
+        .step-number.error { background: var(--error); }
+        .step-content { flex: 1; }
+        .step-title { font-weight: 600; margin-bottom: 0.25rem; }
+        .step-desc { color: var(--text-muted); font-size: 0.875rem; }
+        button {
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 0.75rem 1.5rem;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.2s;
+            width: 100%;
+        }
+        button:hover:not(:disabled) { background: var(--primary-dark); }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-secondary {
+            background: var(--surface-hover);
+            border: 1px solid var(--border);
+        }
+        .btn-secondary:hover:not(:disabled) { background: var(--border); }
+        .btn-small { padding: 0.5rem 1rem; font-size: 0.875rem; width: auto; }
+        input, select {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--bg);
+            color: var(--text);
+            font-size: 1rem;
+            margin-bottom: 0.75rem;
+        }
+        input:focus, select:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+        label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+            font-size: 0.875rem;
+            color: var(--text-muted);
+        }
+        .form-group { margin-bottom: 1rem; }
+        .wallet-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.5rem;
+            margin-bottom: 0.75rem;
+        }
+        .wallet-btn {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 0.625rem 0.75rem;
+            font-size: 0.875rem;
+            cursor: pointer;
+            color: var(--text);
+            transition: border-color 0.2s, background 0.2s;
+        }
+        .wallet-btn:hover { border-color: var(--primary); background: var(--surface-hover); }
+        .wallet-address {
+            font-family: monospace;
+            font-size: 0.8rem;
+            background: var(--bg);
+            padding: 0.5rem;
+            border-radius: 6px;
+            word-break: break-all;
+            color: var(--text-muted);
+            margin-top: 0.5rem;
+        }
+        .status {
+            padding: 0.75rem;
+            border-radius: 8px;
+            margin-top: 0.75rem;
+            font-size: 0.875rem;
+        }
+        .status.success {
+            background: color-mix(in srgb, var(--success) 20%, transparent);
+            border: 1px solid var(--success);
+            color: var(--success);
+        }
+        .status.error {
+            background: color-mix(in srgb, var(--error) 20%, transparent);
+            border: 1px solid var(--error);
+            color: var(--error);
+        }
+        .status.info {
+            background: color-mix(in srgb, var(--primary) 15%, transparent);
+            border: 1px solid var(--primary);
+        }
+        .hidden { display: none !important; }
+        .spinner {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 2px solid transparent;
+            border-top-color: currentColor;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-right: 0.4rem;
+            vertical-align: middle;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .cost-display {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: var(--text);
+            padding: 0.5rem 0;
+        }
+        .plan-detail {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-top: 0.25rem;
+        }
+        .no-wallets-msg {
+            font-size: 0.875rem;
+            color: var(--text-muted);
+            padding: 0.5rem 0;
+        }
+        .no-wallets-msg a { color: var(--primary); }
+        .tx-link { color: var(--primary); text-decoration: none; word-break: break-all; }
+        .tx-link:hover { text-decoration: underline; }
+        .divider { border-top: 1px solid var(--border); margin: 1.5rem 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>{{PAGE_TITLE}}</h1>
+        <p class="subtitle">Get your own server with Cardano wallet authentication</p>
+
+        <!-- Step 1: Connect Wallet -->
+        <div class="card" id="step-connect">
+            <div class="step">
+                <div class="step-number" id="step1-num">1</div>
+                <div class="step-content">
+                    <div class="step-title">Connect Wallet</div>
+                    <div class="step-desc">Connect your Cardano CIP-30 wallet to get started</div>
+                </div>
+            </div>
+            <div id="wallet-not-connected">
+                <div id="wallet-list" class="wallet-grid"></div>
+                <p id="no-wallets" class="no-wallets-msg hidden">
+                    No CIP-30 wallets detected. Install
+                    <a href="https://eternl.io" target="_blank" rel="noopener">Eternl</a>,
+                    <a href="https://namiwallet.io" target="_blank" rel="noopener">Nami</a>, or another
+                    Cardano wallet extension.
+                </p>
+            </div>
+            <div id="wallet-connected" class="hidden">
+                <div class="wallet-address" id="wallet-address"></div>
+            </div>
+        </div>
+
+        <!-- Step 2: Select Plan -->
+        <div class="card" id="step-plan">
+            <div class="step">
+                <div class="step-number" id="step2-num">2</div>
+                <div class="step-content">
+                    <div class="step-title">Choose Plan</div>
+                    <div class="step-desc">Select a subscription plan and duration</div>
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="plan-select">Plan</label>
+                <select id="plan-select" disabled>
+                    <option value="">Loading plans...</option>
+                </select>
+                <div class="plan-detail hidden" id="plan-detail"></div>
+            </div>
+            <div class="form-group">
+                <label for="days-input">Duration (days)</label>
+                <input type="number" id="days-input" value="30" min="1" max="365" disabled>
+            </div>
+            <div class="form-group">
+                <label>Total Cost</label>
+                <div class="cost-display" id="total-cost">-</div>
+            </div>
+        </div>
+
+        <!-- Step 3: Subscribe -->
+        <div class="card" id="step-subscribe">
+            <div class="step">
+                <div class="step-number" id="step3-num">3</div>
+                <div class="step-content">
+                    <div class="step-title">Subscribe</div>
+                    <div class="step-desc">Sign your credentials and submit the subscription transaction</div>
+                </div>
+            </div>
+            <button id="btn-subscribe" disabled>Subscribe</button>
+            <div id="subscribe-status"></div>
+        </div>
+
+        <!-- Result -->
+        <div class="card hidden" id="result-card">
+            <div class="step">
+                <div class="step-number done">&#x2713;</div>
+                <div class="step-content">
+                    <div class="step-title">Subscription Submitted!</div>
+                    <div class="step-desc">Your server is being provisioned</div>
+                </div>
+            </div>
+            <div class="status success" id="result-content">
+                Transaction submitted. Your server will be ready shortly.
+            </div>
+        </div>
+    </div>
+
+    <script>
+    var CONFIG = {
+        serverPublicKey: '{{SERVER_PUBLIC_KEY}}',
+        publicSecret: '{{PUBLIC_SECRET}}',
+        nftPolicyId: '{{NFT_POLICY_ID}}',
+        validatorAddress: '{{SUBSCRIPTION_VALIDATOR_ADDRESS}}',
+        beaconPolicyId: '{{BEACON_POLICY_ID}}',
+        blockfrostProjectId: '{{BLOCKFROST_PROJECT_ID}}',
+        network: '{{NETWORK}}',
+    };
+    </script>
+    <script src="signup-engine.js"></script>
+</body>
+</html>
