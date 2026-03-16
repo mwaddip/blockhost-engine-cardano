@@ -17,6 +17,7 @@ import {
   handleSubscriptionExtended,
   handleSubscriptionRemoved,
 } from "../handlers/index.js";
+import { runReconciliation as reconcileNftOwnership } from "../reconcile/index.js";
 
 // ── Intervals ─────────────────────────────────────────────────────────────────
 
@@ -33,10 +34,10 @@ let lastFundCycle = 0;
 // ── Periodic tasks ────────────────────────────────────────────────────────────
 
 async function runReconciliation(
-  _client: BlockFrostAPI,
+  client: BlockFrostAPI,
+  nftPolicyId: string,
 ): Promise<void> {
-  // TODO (Task 5): compare on-chain beacon state with local DB and fix drift
-  console.log("[MONITOR] Reconciliation complete (stub).");
+  await reconcileNftOwnership(client, nftPolicyId);
 }
 
 async function runFundCycle(
@@ -52,6 +53,7 @@ async function poll(
   client: BlockFrostAPI,
   validatorAddress: string,
   beaconPolicyId: string,
+  nftPolicyId: string,
 ): Promise<void> {
   while (running) {
     try {
@@ -90,7 +92,7 @@ async function poll(
       if (now - lastReconcile >= RECONCILE_INTERVAL_MS) {
         console.log("[MONITOR] Running reconciliation...");
         try {
-          await runReconciliation(client);
+          await runReconciliation(client, nftPolicyId);
         } catch (err) {
           console.error(`[MONITOR] Reconciliation error: ${err}`);
         }
@@ -166,7 +168,7 @@ async function main(): Promise<void> {
   lastFundCycle = Date.now();
 
   console.log("Monitor is running. Press Ctrl+C to stop.\n");
-  await poll(client, config.subscriptionValidatorAddress, config.beaconPolicyId);
+  await poll(client, config.subscriptionValidatorAddress, config.beaconPolicyId, config.nftPolicyId);
 }
 
 main().catch((err) => {
