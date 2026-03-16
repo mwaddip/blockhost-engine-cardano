@@ -14,7 +14,6 @@
  * one failure does not short-circuit subsequent steps.
  */
 
-import type { BlockFrostAPI } from "@blockfrost/blockfrost-js";
 import type { Addressbook, FundManagerConfig, RevenueShareConfig } from "./types.js";
 import { resolveRole } from "./addressbook.js";
 import { executeBalance } from "../bw/commands/balance.js";
@@ -42,18 +41,17 @@ function lovelaceToStr(lovelace: bigint): string {
 export async function topUpHotWalletGas(
   book: Addressbook,
   config: FundManagerConfig,
-  client: BlockFrostAPI,
 ): Promise<void> {
   if (!book["hot"]?.address) return;
   if (!book["server"]?.address || !book["server"]?.keyfile) return;
 
-  const hotBal = await executeBalance("hot", undefined, book, client);
+  const hotBal = await executeBalance("hot", undefined, book);
   if (hotBal.adaBalance >= config.hot_wallet_gas_lovelace) return;
 
   const needed = config.hot_wallet_gas_lovelace - hotBal.adaBalance;
 
   // Require server to have at least 2× what we need
-  const serverBal = await executeBalance("server", undefined, book, client);
+  const serverBal = await executeBalance("server", undefined, book);
   if (serverBal.adaBalance < needed * 2n) {
     console.warn(
       `[FUND] Server ADA too low to top up hot wallet ` +
@@ -76,12 +74,11 @@ export async function topUpHotWalletGas(
 export async function topUpServerStablecoinBuffer(
   book: Addressbook,
   config: FundManagerConfig,
-  client: BlockFrostAPI,
 ): Promise<void> {
   if (!book["server"]?.address) return;
   if (!book["hot"]?.address) return;
 
-  const serverBal = await executeBalance("server", "stable", book, client);
+  const serverBal = await executeBalance("server", "stable", book);
   if (serverBal.tokenBalance === undefined) {
     // No payment token configured — skip silently
     return;
@@ -91,7 +88,7 @@ export async function topUpServerStablecoinBuffer(
 
   const needed = config.server_stablecoin_buffer_lovelace - serverBal.tokenBalance;
 
-  const hotBal = await executeBalance("hot", "stable", book, client);
+  const hotBal = await executeBalance("hot", "stable", book);
   if ((hotBal.tokenBalance ?? 0n) < needed) {
     console.warn(
       `[FUND] Hot wallet stablecoin insufficient for server buffer top-up ` +
@@ -118,7 +115,6 @@ export async function topUpServerStablecoinBuffer(
 export async function distributeRevenueShares(
   book: Addressbook,
   revenueConfig: RevenueShareConfig,
-  client: BlockFrostAPI,
 ): Promise<void> {
   if (!revenueConfig.enabled || revenueConfig.recipients.length === 0) {
     return;
@@ -131,7 +127,7 @@ export async function distributeRevenueShares(
 
   if (!book["hot"]?.address) return;
 
-  const hotBal = await executeBalance("hot", undefined, book, client);
+  const hotBal = await executeBalance("hot", undefined, book);
   if (hotBal.adaBalance === 0n) {
     console.log("[FUND] Hot wallet ADA balance is zero, skipping revenue shares");
     return;
@@ -192,7 +188,6 @@ export async function distributeRevenueShares(
  */
 export async function sendRemainderToAdmin(
   book: Addressbook,
-  client: BlockFrostAPI,
 ): Promise<void> {
   const adminAddress = resolveRole("admin", book);
   if (!adminAddress) {
@@ -202,7 +197,7 @@ export async function sendRemainderToAdmin(
 
   if (!book["hot"]?.address) return;
 
-  const hotBal = await executeBalance("hot", undefined, book, client);
+  const hotBal = await executeBalance("hot", undefined, book);
   if (hotBal.adaBalance === 0n) {
     console.log("[FUND] Hot wallet ADA balance is zero, nothing to send to admin");
     return;
