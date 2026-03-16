@@ -68,30 +68,30 @@ function formatVmName(vmId: number): string {
 // ── Expiry calculation ────────────────────────────────────────────────────────
 
 /**
- * Slots per day on Cardano (1 slot = 1 second).
+ * Milliseconds per day.
  */
-const SLOTS_PER_DAY = 86_400n;
+const MS_PER_DAY = 86_400_000n;
 
 /**
- * Calculate days remaining from the current slot until expirySlot.
- * currentSlot is fetched from Blockfrost tip. Returns at least 1.
+ * Calculate days remaining from the current POSIX ms timestamp until expiry.
+ * currentMs defaults to 0 if not provided. Returns at least 1.
  */
-function calculateExpiryDays(expirySlot: bigint, currentSlot?: bigint): number {
-  const now = currentSlot ?? 0n;
-  if (expirySlot <= now) return 1;
-  const slotsRemaining = expirySlot - now;
-  const days = Number(slotsRemaining / SLOTS_PER_DAY);
+function calculateExpiryDays(expiry: bigint, currentMs?: bigint): number {
+  const now = currentMs ?? 0n;
+  if (expiry <= now) return 1;
+  const msRemaining = expiry - now;
+  const days = Number(msRemaining / MS_PER_DAY);
   return Math.max(1, days);
 }
 
 /**
- * Calculate additional days between two expiry slots.
+ * Calculate additional days between two expiry POSIX ms timestamps.
  * Used when a subscription is extended.
  */
-function calculateAdditionalDays(oldExpirySlot: bigint, newExpirySlot: bigint): number {
-  if (newExpirySlot <= oldExpirySlot) return 0;
-  const slotDelta = newExpirySlot - oldExpirySlot;
-  const days = Number(slotDelta / SLOTS_PER_DAY);
+function calculateAdditionalDays(oldExpiry: bigint, newExpiry: bigint): number {
+  if (newExpiry <= oldExpiry) return 0;
+  const msDelta = newExpiry - oldExpiry;
+  const days = Number(msDelta / MS_PER_DAY);
   return Math.max(1, days);
 }
 
@@ -242,15 +242,15 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
 
   const vmId = allocateVmId();
   const vmName = formatVmName(vmId);
-  const expiryDays = calculateExpiryDays(datum.expirySlot);
+  const expiryDays = calculateExpiryDays(datum.expiry);
 
   console.log("\n========== SUBSCRIPTION CREATED ==========");
   console.log(`Beacon:      ${beaconName}`);
   console.log(`UTXO:        ${utxoRef}`);
   console.log(`Plan ID:     ${datum.planId}`);
   console.log(`Subscriber:  ${datum.subscriber}`);
-  console.log(`Expiry slot: ${datum.expirySlot}`);
-  console.log(`Amount:      ${datum.amountRemaining} (rate: ${datum.ratePerInterval}/${datum.intervalSlots} slots)`);
+  console.log(`Expiry (POSIX ms): ${datum.expiry}`);
+  console.log(`Amount:      ${datum.amountRemaining} (rate: ${datum.ratePerInterval}/${datum.intervalMs} ms)`);
   console.log(`User enc:    ${datum.userEncrypted.length > 10 ? datum.userEncrypted.slice(0, 10) + "..." : datum.userEncrypted}`);
   console.log("------------------------------------------");
   console.log(`Provisioning VM: ${vmName} (${expiryDays} days)`);
@@ -364,7 +364,7 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
 /**
  * Handle a beacon UTXO that changed to a new UTXO ref (spend-and-recreate).
  *
- * The new datum carries an updated expiry timestamp and amountPaid.
+ * The new datum carries an updated expiry timestamp and amountRemaining.
  * We calculate additional days from the delta between old and new expiry,
  * update the VM database, and resume the VM if it was suspended.
  */
@@ -378,14 +378,14 @@ export async function handleSubscriptionExtended(
   console.log(`Beacon:         ${beaconName}`);
   console.log(`Old UTXO:       ${old.utxoRef}`);
   console.log(`New UTXO:       ${updated.utxoRef}`);
-  console.log(`Old expiry slot: ${old.datum.expirySlot}`);
-  console.log(`New expiry slot: ${newDatum.expirySlot}`);
+  console.log(`Old expiry (POSIX ms): ${old.datum.expiry}`);
+  console.log(`New expiry (POSIX ms): ${newDatum.expiry}`);
   console.log(`Old amount:      ${old.datum.amountRemaining}`);
   console.log(`New amount:      ${newDatum.amountRemaining}`);
   console.log(`Subscriber:      ${newDatum.subscriber}`);
   console.log("-------------------------------------------");
 
-  const additionalDays = calculateAdditionalDays(old.datum.expirySlot, newDatum.expirySlot);
+  const additionalDays = calculateAdditionalDays(old.datum.expiry, newDatum.expiry);
   console.log(`Additional days: ${additionalDays}`);
 
   // We need to find the VM name associated with this beacon.

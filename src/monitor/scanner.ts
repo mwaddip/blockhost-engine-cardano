@@ -177,9 +177,12 @@ export function getKnownSubscriptions(): Map<string, TrackedSubscription> {
 //
 //   Constr 0 [
 //     planId         : Int          → { int: N }
-//     expiry         : Int          → { int: N }  (PosixTime ms)
+//     expiry         : Int          → { int: N }  (POSIX ms)
 //     subscriber     : Bytes        → { bytes: hex }  (bech32 payment key hash)
-//     amountPaid     : Int          → { int: N }
+//     amountRemaining: Int          → { int: N }
+//     ratePerInterval: Int          → { int: N }
+//     intervalMs     : Int          → { int: N }  (POSIX ms)
+//     lastCollected  : Int          → { int: N }  (POSIX ms)
 //     paymentAsset   : Constr 0 [ policyId: Bytes, assetName: Bytes ]
 //     beaconId       : Bytes        → { bytes: hex }
 //     userEncrypted  : Bytes        → { bytes: hex }
@@ -208,8 +211,8 @@ function parseDatumFromUtxo(utxo: BlockfrostUtxo): SubscriptionDatum | null {
     const planId = intField(f0);
     if (planId === null) return null;
 
-    const expirySlot = bigIntField(f1);
-    if (expirySlot === null) return null;
+    const expiry = bigIntField(f1);
+    if (expiry === null) return null;
 
     const subscriber = bytesField(f2);
     if (subscriber === null) return null;
@@ -220,11 +223,11 @@ function parseDatumFromUtxo(utxo: BlockfrostUtxo): SubscriptionDatum | null {
     const ratePerInterval = bigIntField(f4);
     if (ratePerInterval === null) return null;
 
-    const intervalSlots = bigIntField(f5);
-    if (intervalSlots === null) return null;
+    const intervalMs = bigIntField(f5);
+    if (intervalMs === null) return null;
 
-    const lastCollectedSlot = bigIntField(f6);
-    if (lastCollectedSlot === null) return null;
+    const lastCollected = bigIntField(f6);
+    if (lastCollected === null) return null;
 
     // paymentAsset is Constr 0 [ policyId: Bytes, assetName: Bytes ]
     if (!isConstr(f7) || f7.constructor !== 0 || f7.fields.length < 2) return null;
@@ -240,12 +243,12 @@ function parseDatumFromUtxo(utxo: BlockfrostUtxo): SubscriptionDatum | null {
 
     return {
       planId: Number(planId),
-      expirySlot,
+      expiry,
       subscriber,
       amountRemaining,
       ratePerInterval,
-      intervalSlots,
-      lastCollectedSlot,
+      intervalMs,
+      lastCollected,
       paymentAsset: { policyId, assetName },
       beaconId,
       userEncrypted,
