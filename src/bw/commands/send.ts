@@ -1,0 +1,82 @@
+/**
+ * bw send <amount> <token> <from> <to>
+ *
+ * Send ADA or native tokens from a signing wallet to a recipient.
+ *
+ * TODO: Full transaction building requires MeshJS integration and a funded
+ * testnet wallet. This stub has the correct interface so fund-manager can
+ * import and call executeSend() once the implementation lands.
+ *
+ * Core function executeSend() is also used by fund-manager.
+ */
+
+import type { Addressbook } from "../../fund-manager/types.js";
+import { resolveAddress, resolveToken, loadWalletFromRole } from "../cli-utils.js";
+
+/**
+ * Core send operation — used by both CLI and fund-manager.
+ *
+ * @param amountStr  Human-readable amount (e.g. "1.5" for 1.5 ADA or tokens)
+ * @param tokenArg   Token shortcut or "policyId.assetName"
+ * @param fromRole   Addressbook role (must have keyfile)
+ * @param toRole     Addressbook role or bech32 address
+ * @param book       Addressbook
+ */
+export async function executeSend(
+  amountStr: string,
+  tokenArg: string,
+  fromRole: string,
+  toRole: string,
+  book: Addressbook,
+): Promise<void> {
+  const asset = resolveToken(tokenArg);
+  const toAddress = resolveAddress(toRole, book);
+
+  // Validate the from-role has a keyfile (will throw if not)
+  const wallet = await loadWalletFromRole(fromRole, book);
+
+  const isAda = asset.policyId === "" && asset.assetName === "";
+  const tokenLabel = isAda
+    ? "ADA"
+    : `${asset.policyId.slice(0, 8)}...${asset.assetName}`;
+
+  console.log(
+    `[TODO] Send ${amountStr} ${tokenLabel} from ${wallet.address} to ${toAddress}`,
+  );
+  console.log(
+    "TODO: Full Cardano transaction building requires MeshJS integration.",
+  );
+  console.log(
+    "      Implement once MeshJS TxBuilder is wired and testnet wallet is funded.",
+  );
+  throw new Error("executeSend: not yet implemented (MeshJS tx building pending)");
+}
+
+/**
+ * CLI handler
+ */
+export async function sendCommand(
+  args: string[],
+  book: Addressbook,
+): Promise<void> {
+  if (args.length < 4) {
+    console.error("Usage: bw send <amount> <token> <from> <to>");
+    console.error("  Example: bw send 10 ada hot admin");
+    console.error("  Example: bw send 100 stable server hot");
+    process.exit(1);
+  }
+
+  const [amountStr, tokenArg, fromRole, toRole] = args;
+  if (!amountStr || !tokenArg || !fromRole || !toRole) {
+    console.error("Usage: bw send <amount> <token> <from> <to>");
+    process.exit(1);
+  }
+
+  const amount = parseFloat(amountStr);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    console.error(`Invalid amount: ${amountStr}`);
+    process.exit(1);
+  }
+
+  await executeSend(amountStr, tokenArg, fromRole, toRole, book);
+}
