@@ -12,6 +12,7 @@ const WEB3_DEFAULTS_PATH = `${CONFIG_DIR}/web3-defaults.yaml`;
 const POLICY_ID_RE = /^[0-9a-fA-F]{56}$/;
 
 export interface Web3Config {
+  /** Blockfrost project ID — if empty/missing, Koios is used instead (free, no key) */
   readonly blockfrostProjectId: string;
   readonly network: CardanoNetwork;
   readonly nftPolicyId: string;
@@ -55,12 +56,8 @@ export function loadWeb3Config(): Web3Config {
   const bc = raw.blockchain;
   if (!bc) throw new Error('Missing "blockchain" section in web3-defaults.yaml');
 
-  if (!bc.blockfrost_project_id) {
-    throw new Error("blockchain.blockfrost_project_id not set in web3-defaults.yaml");
-  }
-
   return {
-    blockfrostProjectId: bc.blockfrost_project_id,
+    blockfrostProjectId: bc.blockfrost_project_id ?? "",
     network: parseNetwork(bc.network),
     nftPolicyId: requirePolicyId(bc.nft_policy_id, "blockchain.nft_policy_id"),
     subscriptionValidatorHash: requirePolicyId(
@@ -82,12 +79,8 @@ export function loadNetworkConfig(): {
 
   const raw = yaml.load(fs.readFileSync(WEB3_DEFAULTS_PATH, "utf8")) as RawYaml;
   const bc = raw.blockchain;
-  if (!bc?.blockfrost_project_id) {
-    throw new Error("blockchain.blockfrost_project_id not set in web3-defaults.yaml");
-  }
-
   return {
-    blockfrostProjectId: bc.blockfrost_project_id,
-    network: parseNetwork(bc.network),
+    blockfrostProjectId: bc?.blockfrost_project_id ?? "",
+    network: parseNetwork(bc?.network),
   };
 }
