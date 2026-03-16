@@ -10,12 +10,18 @@ pub type AssetId {
 pub type SubscriptionDatum {
   /// Plan identifier (maps to off-chain plan config)
   plan_id: Int,
-  /// Expiration timestamp (POSIX milliseconds)
-  expiry: Int,
+  /// Expiration slot (absolute slot number — subscription ends at this slot)
+  expiry_slot: Int,
   /// Subscriber's payment address key hash (for refund verification)
   subscriber_key_hash: ByteArray,
-  /// Amount of payment token locked
-  amount_paid: Int,
+  /// Amount of payment token currently remaining in this UTXO
+  amount_remaining: Int,
+  /// Cost per collection interval in payment token base units
+  rate_per_interval: Int,
+  /// Collection interval in slots (e.g. 86400 = ~1 day)
+  interval_slots: Int,
+  /// Slot of the last partial collection (or subscription creation)
+  last_collected_slot: Int,
   /// What token was used for payment
   payment_asset: AssetId,
   /// Beacon minting policy hash (for cross-referencing)
