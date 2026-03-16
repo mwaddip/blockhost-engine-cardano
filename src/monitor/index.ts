@@ -68,11 +68,12 @@ async function poll(
   validatorAddress: string,
   beaconPolicyId: string,
   nftPolicyId: string,
+  network: string,
   adminConfig: ReturnType<typeof loadAdminConfig>,
 ): Promise<void> {
   while (running) {
     try {
-      const diff: ScanDiff = await scanBeacons(client, validatorAddress, beaconPolicyId);
+      const diff: ScanDiff = await scanBeacons(client, validatorAddress, beaconPolicyId, network);
 
       // Process new subscriptions
       for (const sub of diff.created) {
@@ -212,6 +213,7 @@ async function main(): Promise<void> {
     config.subscriptionValidatorAddress,
     config.beaconPolicyId,
     config.nftPolicyId,
+    config.network,
     adminConfig,
   );
 }

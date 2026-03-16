@@ -79,22 +79,51 @@ interface BlockfrostUtxo {
  */
 export async function scanBeacons(
   client: BlockFrostAPI,
-  validatorAddress: string,
+  _validatorAddress: string,
   beaconPolicyId: string,
+  network: string = "preprod",
 ): Promise<ScanDiff> {
-  // ── Fetch current UTXOs from Blockfrost ──────────────────────────────────
-  let raw: unknown[];
+  // ── Fetch current UTXOs by scanning for beacon tokens ──────────────────
+  // Subscriptions live at CIP-89 addresses (per-subscriber), so we can't
+  // query a single address. Instead, find all addresses holding beacon tokens
+  // via Koios, then fetch UTXOs from each.
+  const koiosUrl = network === "mainnet"
+    ? "https://api.koios.rest/api/v1"
+    : network === "preview"
+      ? "https://preview.koios.rest/api/v1"
+      : "https://preprod.koios.rest/api/v1";
+
+  let holders: Array<{ payment_address: string }> = [];
   try {
-    raw = await client.addressesUtxosAll(validatorAddress);
-  } catch (err: unknown) {
-    if (isBlockfrost404(err)) {
-      raw = [];
-    } else {
-      throw err;
+    const res = await fetch(`${koiosUrl}/policy_asset_addresses`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ _asset_policy: beaconPolicyId }),
+    });
+    if (res.ok) {
+      holders = (await res.json()) as Array<{ payment_address: string }>;
     }
+  } catch {
+    // Koios unavailable — return empty diff
+    return { created: [], removed: [], extended: [] };
   }
 
-  const utxos = raw as BlockfrostUtxo[];
+  const uniqueAddresses = [...new Set(holders.map(h => h.payment_address))];
+
+  const utxos: BlockfrostUtxo[] = [];
+  for (const addr of uniqueAddresses) {
+    try {
+      const raw = await client.addressesUtxosAll(addr);
+      for (const u of raw as BlockfrostUtxo[]) {
+        const hasBeacon = (u.amount ?? []).some(
+          (a) => a.unit.startsWith(beaconPolicyId) && a.unit.length > 56,
+        );
+        if (hasBeacon) utxos.push(u);
+      }
+    } catch (err: unknown) {
+      if (!isBlockfrost404(err)) throw err;
+    }
+  }
 
   // ── Build current beacon map ─────────────────────────────────────────────
   const currentBeacons = new Map<string, TrackedSubscription>();

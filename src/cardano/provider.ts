@@ -338,14 +338,9 @@ export function resetProvider(): void {
 // ── Legacy convenience exports (used by existing code) ──────────────────────
 
 /** @deprecated Use getProvider() instead */
-export function getBlockfrost(projectId: string, network: CardanoNetwork): BlockFrostAPI {
-  const baseUrl =
-    network === "mainnet"
-      ? "https://cardano-mainnet.blockfrost.io/api"
-      : network === "preprod"
-        ? "https://cardano-preprod.blockfrost.io/api"
-        : "https://cardano-preview.blockfrost.io/api";
-  return new BlockFrostAPI({ projectId, customBackend: baseUrl });
+export function getBlockfrost(projectId: string, _network: CardanoNetwork): BlockFrostAPI {
+  // The SDK auto-detects network from the project ID prefix (preprod/preview/mainnet)
+  return new BlockFrostAPI({ projectId });
 }
 
 /** @deprecated Use provider.fetchUtxos() instead */

@@ -92,42 +92,27 @@ validator subscription(
     when redeemer is {
       // Server collects earned payment — partial collection, UTXO continues
       ServiceCollect -> {
-        trace @"SC:1 check signed"
         expect signed_by(tx, server_key_hash)
-        trace @"SC:2 check lower_bound"
         expect Some(current_slot) = tx_lower_bound(tx)
-        trace @"SC:3 calc earned"
         let earned = claimable_amount(datum, current_slot)
-        trace @"SC:4 check earned > 0"
         expect earned > 0
-        trace @"SC:5 find continuing output"
         expect Some(continuing_output) = find_continuing_output(tx, own_ref)
-        trace @"SC:6 get inline datum"
         expect Some(new_datum) = get_inline_datum(continuing_output)
-        trace @"SC:7 calc new_last_collected"
         let intervals = elapsed_intervals(datum, current_slot)
         let new_last_collected =
           datum.last_collected + intervals * datum.interval_ms
-        trace @"SC:8a plan_id"
-        expect new_datum.plan_id == datum.plan_id
-        trace @"SC:8b expiry_slot"
-        expect new_datum.expiry == datum.expiry
-        trace @"SC:8c subscriber_key_hash"
-        expect new_datum.subscriber_key_hash == datum.subscriber_key_hash
-        trace @"SC:8d rate_per_interval"
-        expect new_datum.rate_per_interval == datum.rate_per_interval
-        trace @"SC:8e interval_slots"
-        expect new_datum.interval_ms == datum.interval_ms
-        trace @"SC:8f payment_asset"
-        expect new_datum.payment_asset == datum.payment_asset
-        trace @"SC:8g beacon_policy_id"
-        expect new_datum.beacon_policy_id == datum.beacon_policy_id
-        trace @"SC:8h user_encrypted"
-        expect new_datum.user_encrypted == datum.user_encrypted
-        trace @"SC:8i amount_remaining"
-        expect new_datum.amount_remaining == datum.amount_remaining - earned
-        trace @"SC:8j last_collected_slot"
-        new_datum.last_collected == new_last_collected
+        and {
+          new_datum.plan_id == datum.plan_id,
+          new_datum.expiry == datum.expiry,
+          new_datum.subscriber_key_hash == datum.subscriber_key_hash,
+          new_datum.rate_per_interval == datum.rate_per_interval,
+          new_datum.interval_ms == datum.interval_ms,
+          new_datum.payment_asset == datum.payment_asset,
+          new_datum.beacon_policy_id == datum.beacon_policy_id,
+          new_datum.user_encrypted == datum.user_encrypted,
+          new_datum.amount_remaining == datum.amount_remaining - earned,
+          new_datum.last_collected == new_last_collected,
+        }
       }
 
       // Subscriber cancels — fair split: earned to service, remainder to subscriber

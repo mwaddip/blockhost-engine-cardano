@@ -202,27 +202,40 @@ export async function executeWithdraw(
   const beaconPolicyId = web3.beaconPolicyId;
   console.error(`Scanning for beacon tokens (policy: ${beaconPolicyId.slice(0, 16)}...)...`);
 
-  // Query Koios for all addresses holding beacon policy tokens
-  const beaconHolders = await fetch("https://preprod.koios.rest/api/v1/policy_asset_addresses", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ _asset_policy: beaconPolicyId }),
-  }).then(r => r.json() as Promise<Array<{ payment_address: string; asset_name: string; quantity: string }>>);
+  // Query for all addresses holding beacon policy tokens via the configured provider
+  // Find all addresses holding any token under the beacon policy via Koios
+  let beaconAddresses: string[] = [];
+  try {
+    // Try fetching all assets under the beacon policy
+    const koiosUrl = web3.network === "mainnet"
+      ? "https://api.koios.rest/api/v1"
+      : web3.network === "preview"
+        ? "https://preview.koios.rest/api/v1"
+        : "https://preprod.koios.rest/api/v1";
 
-  if (!beaconHolders || beaconHolders.length === 0) {
+    const holders = await fetch(`${koiosUrl}/policy_asset_addresses`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ _asset_policy: beaconPolicyId }),
+    }).then(r => r.json() as Promise<Array<{ payment_address: string }>>);
+
+    beaconAddresses = [...new Set((holders || []).map(h => h.payment_address))];
+  } catch {
+    console.error("Failed to query beacon holders");
+    return;
+  }
+
+  if (beaconAddresses.length === 0) {
     console.log("No subscription UTXOs found (no beacon tokens on-chain).");
     return;
   }
 
-  // Get UTXOs from each unique address holding beacons
-  const uniqueAddresses = [...new Set(beaconHolders.map(h => h.payment_address))];
-  console.error(`Found beacons at ${uniqueAddresses.length} address(es)`);
+  console.error(`Found beacons at ${beaconAddresses.length} address(es)`);
 
   const utxos: UTxO[] = [];
-  for (const addr of uniqueAddresses) {
+  for (const addr of beaconAddresses) {
     try {
       const addrUtxos = await lucid.utxosAt(addr);
-      // Filter for UTXOs that actually contain a beacon token
       for (const u of addrUtxos) {
         const hasBeacon = Object.keys(u.assets).some(unit => unit.startsWith(beaconPolicyId));
         if (hasBeacon) utxos.push(u);
