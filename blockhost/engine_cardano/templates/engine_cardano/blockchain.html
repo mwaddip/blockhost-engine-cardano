@@ -1,0 +1,484 @@
+{% extends "base.html" %}
+{% from "macros/wizard_steps.html" import step_bar %}
+
+{% block title %}Blockchain Setup - BlockHost Installer{% endblock %}
+
+{% block content %}
+{{ step_bar('cardano') }}
+
+<div class="card">
+    <h2>Blockchain Configuration</h2>
+    <p class="text-muted mb-2">Configure the Cardano network and validator settings for VM provisioning.</p>
+
+    <form id="blockchain-form" method="POST" action="{{ url_for('engine_cardano.wizard_cardano') }}">
+        <!-- Network Selection -->
+        <div class="form-section">
+            <h3>Network Selection</h3>
+            <div class="form-group">
+                <label for="network">Cardano Network</label>
+                <select id="network" name="network">
+                    {% for nid, nname in network_names.items() %}
+                    <option value="{{ nid }}"
+                            {% if blockchain.get('network', 'preprod') == nid %}selected{% endif %}>
+                        {{ nname }}
+                    </option>
+                    {% endfor %}
+                </select>
+                <p class="text-muted mt-1" style="font-size: 0.75rem;">
+                    Use <em>Pre-production</em> or <em>Preview</em> for testing. Switch to <em>Mainnet</em> for production.
+                </p>
+            </div>
+        </div>
+
+        <!-- Blockfrost Configuration -->
+        <div class="form-section">
+            <h3>Blockfrost API</h3>
+            <p class="text-muted mb-2" style="font-size: 0.875rem;">
+                BlockHost uses <a href="https://blockfrost.io" target="_blank" rel="noopener">Blockfrost</a>
+                as the Cardano chain data provider. Create a free project at blockfrost.io and paste the project ID below.
+            </p>
+            <div class="form-group">
+                <label for="blockfrost_project_id">Blockfrost Project ID <span style="color: var(--danger);">*</span></label>
+                <input type="text" id="blockfrost_project_id" name="blockfrost_project_id"
+                       value="{{ blockchain.get('blockfrost_project_id', '') }}"
+                       placeholder="preprod..." required
+                       style="font-family: monospace;">
+                <p class="text-muted mt-1" style="font-size: 0.75rem;">
+                    Format: <code>preprod&lt;32 chars&gt;</code>, <code>preview&lt;32 chars&gt;</code>, or <code>mainnet&lt;32 chars&gt;</code>.
+                    Must match the selected network above.
+                </p>
+            </div>
+        </div>
+
+        <!-- Deployer Wallet -->
+        <div class="form-section">
+            <h3>Deployer Wallet</h3>
+            <p class="text-muted mb-2" style="font-size: 0.875rem;">
+                This wallet pays transaction fees for validator deployment and server operations.
+                Cardano uses CIP-1852 HD wallets with Ed25519 signing.
+            </p>
+
+            <div class="radio-group mb-2">
+                <label class="radio-option" onclick="selectRadio(this)">
+                    <input type="radio" name="wallet_mode" value="generate"
+                           {% if blockchain.get('wallet_mode', 'generate') == 'generate' %}checked{% endif %}>
+                    <div class="radio-label">
+                        <h4>Generate new wallet</h4>
+                        <p>Create a new 24-word mnemonic wallet automatically</p>
+                    </div>
+                </label>
+                <label class="radio-option" onclick="selectRadio(this)">
+                    <input type="radio" name="wallet_mode" value="import"
+                           {% if blockchain.get('wallet_mode') == 'import' %}checked{% endif %}>
+                    <div class="radio-label">
+                        <h4>Import existing wallet</h4>
+                        <p>Use an existing mnemonic phrase</p>
+                    </div>
+                </label>
+            </div>
+
+            <!-- Generate wallet section -->
+            <div id="wallet-generate" {% if blockchain.get('wallet_mode') == 'import' %}class="hidden"{% endif %} class="mb-2">
+                <button type="button" class="btn btn-secondary" onclick="generateWallet()" id="generate-btn">
+                    Generate Wallet
+                </button>
+                <div id="wallet-generated" class="hidden" style="margin-top: 1rem;">
+                    <div class="alert alert-warning">
+                        <strong>Important:</strong> Save your mnemonic phrase securely! It cannot be recovered later.
+                    </div>
+                    <label>Mnemonic Phrase <span style="color: var(--danger);">*</span></label>
+                    <div class="address-box" style="line-height: 1.6;">
+                        <span id="deployer-mnemonic" style="word-break: break-word;">-</span>
+                        <button type="button" class="btn btn-small copy-btn" onclick="copyToClipboard('deployer-mnemonic', this)">Copy</button>
+                    </div>
+                    <p class="text-muted mt-1" style="font-size: 0.75rem;">
+                        Write down these words in order and store them in a secure location.
+                    </p>
+                    <label style="margin-top: 1rem;">Deployer Address (Cardano bech32)</label>
+                    <div class="address-box">
+                        <span id="deployer-address" style="font-family: monospace; word-break: break-all;">-</span>
+                        <button type="button" class="btn btn-small copy-btn" onclick="copyToClipboard('deployer-address', this)">Copy</button>
+                    </div>
+                    <input type="hidden" name="deployer_mnemonic" id="deployer-mnemonic-hidden"
+                           value="{{ blockchain.get('deployer_mnemonic', '') }}">
+                    <input type="hidden" name="deployer_address" id="deployer-address-hidden"
+                           value="{{ blockchain.get('deployer_address', '') }}">
+
+                    <div style="margin-top: 1rem; padding: 1rem; background: var(--bg-secondary); border-radius: 4px;">
+                        <p style="font-size: 0.875rem; margin: 0;">
+                            Fund this address with ADA before proceeding to validator deployment.
+                            At least <strong>10 ADA</strong> is recommended to cover transaction fees.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Import wallet section -->
+            <div id="wallet-import" {% if blockchain.get('wallet_mode', 'generate') != 'import' %}class="hidden"{% endif %}>
+                <div class="form-group">
+                    <label for="import_mnemonic">Mnemonic Phrase</label>
+                    <textarea id="import_mnemonic" name="import_mnemonic" rows="3"
+                              placeholder="word1 word2 word3 ... (15 or 24 words)"
+                              style="font-family: monospace; resize: vertical;">{{ blockchain.get('deployer_mnemonic', '') if blockchain.get('wallet_mode') == 'import' else '' }}</textarea>
+                    <p class="text-muted mt-1" style="font-size: 0.75rem;">
+                        15 or 24 word BIP39 mnemonic phrase (Cardano standard).
+                    </p>
+                </div>
+                <button type="button" class="btn btn-secondary btn-small" onclick="validateImportMnemonic()">
+                    Validate Mnemonic
+                </button>
+                <div id="import-status" class="hidden" style="margin-top: 0.5rem;"></div>
+            </div>
+        </div>
+
+        <!-- Validator Deployment -->
+        <div class="form-section" id="contract-section">
+            <h3>Validators</h3>
+            <p class="text-muted mb-2" style="font-size: 0.875rem;">
+                BlockHost requires NFT and Subscription validators for VM access control on Cardano.
+            </p>
+
+            <div class="radio-group mb-2">
+                <label class="radio-option" onclick="selectRadio(this)">
+                    <input type="radio" name="contract_mode" value="deploy"
+                           {% if blockchain.get('contract_mode', 'deploy') == 'deploy' %}checked{% endif %}>
+                    <div class="radio-label">
+                        <h4>Deploy new validators</h4>
+                        <p>Deploy fresh Aiken validators (requires funded wallet)</p>
+                    </div>
+                </label>
+                <label class="radio-option" onclick="selectRadio(this)">
+                    <input type="radio" name="contract_mode" value="existing"
+                           {% if blockchain.get('contract_mode') == 'existing' %}checked{% endif %}>
+                    <div class="radio-label">
+                        <h4>Use existing validators</h4>
+                        <p>Enter policy IDs of already-deployed validators</p>
+                    </div>
+                </label>
+            </div>
+
+            <!-- Existing validators section -->
+            <div id="contracts-existing" {% if blockchain.get('contract_mode', 'deploy') != 'existing' %}class="hidden"{% endif %}>
+                <div class="two-col">
+                    <div class="form-group">
+                        <label for="nft_policy_id">NFT Policy ID</label>
+                        <input type="text" id="nft_policy_id" name="nft_policy_id"
+                               value="{{ blockchain.get('nft_policy_id', '') }}"
+                               placeholder="56 hex characters"
+                               style="font-family: monospace;">
+                    </div>
+                    <div class="form-group">
+                        <label for="subscription_policy_id">Subscription Policy ID</label>
+                        <input type="text" id="subscription_policy_id" name="subscription_policy_id"
+                               value="{{ blockchain.get('subscription_policy_id', '') }}"
+                               placeholder="56 hex characters"
+                               style="font-family: monospace;">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Admin Wallet -->
+        <div class="form-section">
+            <h3>Admin Wallet</h3>
+            <p class="text-muted mb-2" style="font-size: 0.875rem;">
+                Optional: enter an existing Cardano wallet address to use as the admin.
+                If left blank, the deployer wallet will also be the admin.
+            </p>
+            <div class="form-group">
+                <label for="admin_wallet">Admin Wallet Address (bech32)</label>
+                <input type="text" id="admin_wallet" name="admin_wallet"
+                       value="{{ blockchain.get('admin_wallet', '') }}"
+                       placeholder="addr1... or addr_test1..."
+                       style="font-family: monospace;">
+                <p class="text-muted mt-1" style="font-size: 0.75rem;">
+                    Mainnet addresses start with <code>addr1</code>; testnet addresses start with <code>addr_test1</code>.
+                </p>
+            </div>
+        </div>
+
+        <!-- Subscription Plan -->
+        <div class="form-section">
+            <h3>Subscription Plan</h3>
+            <p class="text-muted mb-2" style="font-size: 0.875rem;">
+                Configure the default hosting plan that customers will subscribe to.
+            </p>
+
+            <div class="two-col">
+                <div class="form-group">
+                    <label for="plan_name">Plan Name</label>
+                    <input type="text" id="plan_name" name="plan_name"
+                           value="{{ blockchain.get('plan_name', 'Basic VM') }}" placeholder="Basic VM">
+                </div>
+                <div class="form-group">
+                    <label for="plan_price_cents">Price per Day (USD cents)</label>
+                    <input type="number" id="plan_price_cents" name="plan_price_cents"
+                           value="{{ blockchain.get('plan_price_cents', 50) }}" min="1" step="1" placeholder="50">
+                    <p class="text-muted mt-1" style="font-size: 0.75rem;">
+                        e.g. 50 = $0.50/day, 100 = $1.00/day
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Revenue Sharing -->
+        <div class="form-section">
+            <h3>Revenue Sharing</h3>
+            <p class="text-muted mb-2" style="font-size: 0.875rem;">
+                Optionally share a percentage of subscription revenue with the project developer and/or your IPv6 broker.
+            </p>
+
+            <div class="form-group">
+                <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                    <input type="checkbox" id="revenue_share_enabled" name="revenue_share_enabled"
+                           {% if blockchain.get('revenue_share_enabled') %}checked{% endif %}
+                           onchange="toggleRevenueShare()">
+                    <span>Share a percentage of revenue</span>
+                </label>
+            </div>
+
+            <div id="revenue-share-details" {% if not blockchain.get('revenue_share_enabled') %}class="hidden"{% endif %}>
+                <div class="form-group">
+                    <label for="revenue_share_percent">Percentage to share</label>
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <input type="number" id="revenue_share_percent" name="revenue_share_percent"
+                               value="{{ blockchain.get('revenue_share_percent', 1.0) }}"
+                               min="0.1" step="0.1" style="width: 6rem;">
+                        <span>%</span>
+                    </div>
+                    <p class="text-muted mt-1" style="font-size: 0.75rem;">
+                        Split equally among selected recipients.
+                    </p>
+                </div>
+
+                <div class="form-group">
+                    <label>Recipients</label>
+                    <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                        <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                            <input type="checkbox" name="revenue_share_dev"
+                                   {% if blockchain.get('revenue_share_dev', true) %}checked{% endif %}>
+                            <span>Developer</span>
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                            <input type="checkbox" name="revenue_share_broker"
+                                   {% if blockchain.get('revenue_share_broker') %}checked{% endif %}>
+                            <span>Broker</span>
+                            <span class="text-muted" style="font-size: 0.7rem;">(resolved at setup time)</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex justify-between" style="margin-top: 2rem;">
+            <a href="{{ url_for('wizard_storage') }}" class="btn btn-secondary">Back</a>
+            <button type="submit" class="btn btn-primary" id="continue-btn">Continue</button>
+        </div>
+    </form>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Toggle revenue sharing details
+function toggleRevenueShare() {
+    var enabled = document.getElementById('revenue_share_enabled').checked;
+    document.getElementById('revenue-share-details').classList.toggle('hidden', !enabled);
+}
+
+// Toggle sections based on radio selection
+function selectRadio(element) {
+    var radio = element.querySelector('input[type="radio"]');
+    radio.checked = true;
+
+    // Update styling
+    var group = element.closest('.radio-group');
+    group.querySelectorAll('.radio-option').forEach(function(opt) { opt.classList.remove('selected'); });
+    element.classList.add('selected');
+
+    if (radio.name === 'wallet_mode') {
+        document.getElementById('wallet-generate').classList.toggle('hidden', radio.value !== 'generate');
+        document.getElementById('wallet-import').classList.toggle('hidden', radio.value !== 'import');
+        if (radio.value === 'import') {
+            document.getElementById('deployer-mnemonic-hidden').value = '';
+            document.getElementById('deployer-address-hidden').value = '';
+        }
+    } else if (radio.name === 'contract_mode') {
+        document.getElementById('contracts-existing').classList.toggle('hidden', radio.value !== 'existing');
+    }
+}
+
+// Generate new wallet
+function generateWallet() {
+    var btn = document.getElementById('generate-btn');
+    btn.disabled = true;
+    btn.textContent = 'Generating...';
+
+    fetch('{{ url_for("engine_cardano.api_generate_wallet") }}', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'}
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+        btn.disabled = false;
+
+        if (data.error) {
+            alert('Failed to generate wallet: ' + data.error);
+            btn.textContent = 'Generate Wallet';
+            return;
+        }
+
+        document.getElementById('deployer-mnemonic').textContent = data.mnemonic;
+        document.getElementById('deployer-address').textContent = data.address;
+        document.getElementById('deployer-mnemonic-hidden').value = data.mnemonic;
+        document.getElementById('deployer-address-hidden').value = data.address;
+        document.getElementById('wallet-generated').classList.remove('hidden');
+        btn.textContent = 'Regenerate';
+    })
+    .catch(function(err) {
+        btn.disabled = false;
+        alert('Error generating wallet: ' + err.message);
+        btn.textContent = 'Generate Wallet';
+    });
+}
+
+// Copy to clipboard with fallback
+function copyToClipboard(elementId, btn) {
+    var text = document.getElementById(elementId).textContent;
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function() {
+            showCopySuccess(btn);
+        }).catch(function() {
+            fallbackCopyToClipboard(text, btn);
+        });
+    } else {
+        fallbackCopyToClipboard(text, btn);
+    }
+}
+
+function fallbackCopyToClipboard(text, btn) {
+    var textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.left = '-9999px';
+    textarea.style.top = '0';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    try {
+        document.execCommand('copy');
+        showCopySuccess(btn);
+    } catch (err) {
+        btn.textContent = 'Failed';
+        setTimeout(function() { btn.textContent = 'Copy'; }, 2000);
+    }
+    document.body.removeChild(textarea);
+}
+
+function showCopySuccess(btn) {
+    btn.textContent = 'Copied!';
+    setTimeout(function() { btn.textContent = 'Copy'; }, 2000);
+}
+
+// Validate imported mnemonic
+function validateImportMnemonic() {
+    var mnemonicInput = document.getElementById('import_mnemonic');
+    var statusDiv = document.getElementById('import-status');
+
+    fetch('{{ url_for("engine_cardano.api_validate_mnemonic") }}', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({mnemonic: mnemonicInput.value.trim()})
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+        statusDiv.classList.remove('hidden');
+        if (!data.error) {
+            statusDiv.innerHTML = '<div class="status-indicator success">Valid - Address: ' + data.address + '</div>';
+            document.getElementById('deployer-mnemonic-hidden').value = data.mnemonic;
+            document.getElementById('deployer-address-hidden').value = data.address;
+        } else {
+            statusDiv.innerHTML = '<div class="status-indicator error">Invalid: ' + data.error + '</div>';
+        }
+    })
+    .catch(function(err) {
+        statusDiv.classList.remove('hidden');
+        statusDiv.innerHTML = '<div class="status-indicator error">Error: ' + err.message + '</div>';
+    });
+}
+
+// Form validation before submit
+document.getElementById('blockchain-form').addEventListener('submit', function(e) {
+    var walletMode = document.querySelector('input[name="wallet_mode"]:checked').value;
+    var contractMode = document.querySelector('input[name="contract_mode"]:checked').value;
+
+    // Validate Blockfrost project ID
+    var projectId = document.getElementById('blockfrost_project_id').value.trim();
+    if (!projectId) {
+        e.preventDefault();
+        alert('Please enter a Blockfrost project ID.');
+        return;
+    }
+
+    // Validate wallet
+    if (walletMode === 'generate') {
+        var mnemonic = document.getElementById('deployer-mnemonic-hidden').value;
+        if (!mnemonic) {
+            e.preventDefault();
+            alert('Please generate a wallet first.');
+            return;
+        }
+        if (!confirm('Have you saved your mnemonic phrase?\n\nThis phrase cannot be recovered later. Make sure you have written it down securely before continuing.')) {
+            e.preventDefault();
+            return;
+        }
+    } else if (walletMode === 'import') {
+        var importMnemonic = document.getElementById('import_mnemonic').value.trim();
+        if (!importMnemonic) {
+            e.preventDefault();
+            alert('Please enter a mnemonic phrase.');
+            return;
+        }
+        var words = importMnemonic.split(/\s+/);
+        if (words.length < 12) {
+            e.preventDefault();
+            alert('Please enter a valid mnemonic phrase (12-24 words).');
+            return;
+        }
+        if (!document.getElementById('deployer-mnemonic-hidden').value) {
+            document.getElementById('deployer-mnemonic-hidden').value = importMnemonic;
+        }
+    }
+
+    // Validate policy IDs if using existing validators
+    if (contractMode === 'existing') {
+        var nft = document.getElementById('nft_policy_id').value.trim();
+        var sub = document.getElementById('subscription_policy_id').value.trim();
+        var policyRe = /^[0-9a-fA-F]{56}$/;
+        if (!nft || !sub || !policyRe.test(nft) || !policyRe.test(sub)) {
+            e.preventDefault();
+            alert('Please enter valid policy IDs (56 hex characters each).');
+            return;
+        }
+    }
+
+    // Validate admin wallet if provided
+    var adminWallet = document.getElementById('admin_wallet').value.trim();
+    if (adminWallet) {
+        var addrRe = /^(addr1[a-z0-9]{53,}|addr_test1[a-z0-9]{53,})$/;
+        if (!addrRe.test(adminWallet)) {
+            e.preventDefault();
+            alert('Invalid admin wallet address. Cardano addresses start with addr1 (mainnet) or addr_test1 (testnet).');
+            return;
+        }
+    }
+});
+
+// Initialize radio button styling
+document.querySelectorAll('input[type="radio"]:checked').forEach(function(radio) {
+    var opt = radio.closest('.radio-option');
+    if (opt) opt.classList.add('selected');
+});
+</script>
+{% endblock %}

@@ -1,0 +1,48 @@
+<!-- Cardano Engine Summary Section (rendered by engine plugin) -->
+<div class="summary-section">
+    <h3>Blockchain (Cardano)</h3>
+    <div class="summary-item">
+        <span class="summary-label">Network</span>
+        <span class="summary-value">{{ engine_summary.network_name }}</span>
+    </div>
+    <div class="summary-item">
+        <span class="summary-label">Blockfrost Project ID</span>
+        <span class="summary-value" style="font-size: 0.75rem; font-family: monospace;">
+            {% if engine_summary.blockfrost_project_id %}
+                {{ engine_summary.blockfrost_project_id[:12] }}...
+            {% else %}
+                (not set)
+            {% endif %}
+        </span>
+    </div>
+    {% if engine_summary.deployer_address %}
+    <div class="summary-item">
+        <span class="summary-label">Deployer</span>
+        <span class="summary-value" style="font-size: 0.75rem; font-family: monospace; word-break: break-all;">{{ engine_summary.deployer_address }}</span>
+    </div>
+    {% endif %}
+    <div class="summary-item">
+        <span class="summary-label">Validators</span>
+        <span class="summary-value">{{ 'Pre-deployed' if engine_summary.contract_mode == 'existing' else 'Deploy during setup' }}</span>
+    </div>
+    {% if engine_summary.nft_policy_id %}
+    <div class="summary-item">
+        <span class="summary-label">NFT Policy ID</span>
+        <span class="summary-value" style="font-size: 0.75rem; font-family: monospace;">{{ engine_summary.nft_policy_id }}</span>
+    </div>
+    {% endif %}
+    {% if engine_summary.subscription_policy_id %}
+    <div class="summary-item">
+        <span class="summary-label">Subscription Policy ID</span>
+        <span class="summary-value" style="font-size: 0.75rem; font-family: monospace;">{{ engine_summary.subscription_policy_id }}</span>
+    </div>
+    {% endif %}
+    <div class="summary-item">
+        <span class="summary-label">Plan</span>
+        <span class="summary-value">{{ engine_summary.plan_name }} ({{ engine_summary.plan_price_cents }} cents/day)</span>
+    </div>
+    <div class="summary-item">
+        <span class="summary-label">Revenue Sharing</span>
+        <span class="summary-value">{{ 'Enabled' if engine_summary.revenue_share_enabled else 'Disabled' }}</span>
+    </div>
+</div>
