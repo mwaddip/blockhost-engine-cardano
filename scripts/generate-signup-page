@@ -47,6 +47,11 @@ ENGINE_JSON_LOCATIONS = [
     Path('/usr/share/blockhost/engine.json'),           # installed
 ]
 
+PLUTUS_JSON_LOCATIONS = [
+    SCRIPT_DIR.parent / 'plutus.json',                 # development (repo root)
+    Path('/etc/blockhost/plutus.json'),                 # installed
+]
+
 
 # ── File finders ──────────────────────────────────────────────────────
 
@@ -99,6 +104,24 @@ def load_config(config_path: str, web3_config_path: str) -> dict:
         except (json.JSONDecodeError, OSError):
             pass
 
+    # Pull beacon script CBOR and subscription validator hash from plutus.json
+    plutus_json_path = _find_file(PLUTUS_JSON_LOCATIONS)
+    if plutus_json_path.exists():
+        try:
+            with open(plutus_json_path) as f:
+                plutus = json.load(f)
+            validators = plutus.get('validators', [])
+            for v in validators:
+                if v.get('title') == 'beacon.beacon.mint':
+                    config['beacon_script_cbor'] = v.get('compiledCode', '')
+                if v.get('title') == 'subscription.subscription.spend':
+                    config['subscription_validator_hash'] = v.get('hash', '')
+        except (json.JSONDecodeError, OSError) as e:
+            print(f'Warning: failed to read plutus.json: {e}', file=sys.stderr)
+    else:
+        print(f'Warning: plutus.json not found — beacon script CBOR will be empty',
+              file=sys.stderr)
+
     return config
 
 
@@ -121,6 +144,9 @@ def generate_page(config: dict, template: str) -> str:
         '{{NFT_POLICY_ID}}':                  bc.get('nft_policy_id', ''),
         '{{SUBSCRIPTION_VALIDATOR_ADDRESS}}': bc.get('subscription_validator_address', ''),
         '{{BEACON_POLICY_ID}}':               bc.get('beacon_policy_id', ''),
+        '{{BEACON_SCRIPT_CBOR}}':             config.get('beacon_script_cbor', ''),
+        '{{SUBSCRIPTION_VALIDATOR_HASH}}':    config.get('subscription_validator_hash',
+                                                         bc.get('subscription_validator_hash', '')),
         '{{BLOCKFROST_PROJECT_ID}}':          bc.get('blockfrost_project_id', ''),
         '{{NETWORK}}':                        bc.get('network', 'preprod'),
         '{{PAGE_TITLE}}':                     config.get('page_title', 'BlockHost - Get Your Server'),
