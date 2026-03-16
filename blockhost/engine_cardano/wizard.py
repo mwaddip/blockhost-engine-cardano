@@ -44,6 +44,13 @@ NETWORK_NAMES = {
 }
 
 CONFIG_DIR = Path("/etc/blockhost")
+TESTING_MODE_FILE = CONFIG_DIR / ".testing-mode"
+
+# Slots per day on Cardano (1 slot = 1 second)
+SLOTS_PER_DAY = 86_400
+
+# Testing mode: 5 slots per interval (~5 seconds) instead of 1 day
+TESTING_INTERVAL_SLOTS = 5
 
 # Cardano bech32 address prefixes: addr1 (mainnet), addr_test1 (testnet networks)
 CARDANO_ADDRESS_RE = re.compile(
@@ -825,17 +832,50 @@ def finalize_mint_nft(config: dict) -> tuple[bool, Optional[str]]:
         return False, str(e)
 
 
+def _is_testing_mode() -> bool:
+    """Check if testing mode is enabled (/etc/blockhost/.testing-mode exists)."""
+    return TESTING_MODE_FILE.exists()
+
+
+def _get_interval_slots() -> int:
+    """Get the collection interval in slots.
+
+    Testing mode: 5 slots (~5 seconds) for rapid iteration.
+    Production:   86400 slots (~1 day).
+    """
+    if _is_testing_mode():
+        return TESTING_INTERVAL_SLOTS
+    return SLOTS_PER_DAY
+
+
 def finalize_plan(config: dict) -> tuple[bool, Optional[str]]:
-    """Create default subscription plan via bw CLI."""
+    """Create default subscription plan via bw CLI.
+
+    In testing mode (/etc/blockhost/.testing-mode exists), the plan uses
+    massively shorter intervals (5 slots instead of 86400) so the monitor
+    can collect funds every few seconds instead of daily.
+    """
     try:
         blockchain = config.get("blockchain", {})
         plan_name = blockchain.get("plan_name", "Basic VM")
         plan_price = blockchain.get("plan_price_cents", 50)
+        testing = _is_testing_mode()
+        interval_slots = _get_interval_slots()
+
+        if testing:
+            plan_name = f"{plan_name} (TEST)"
 
         env = _bw_env(blockchain)
 
+        cmd = [
+            "bw", "plan", "create",
+            plan_name,
+            str(plan_price),
+            "--interval-slots", str(interval_slots),
+        ]
+
         result = subprocess.run(
-            ["bw", "plan", "create", plan_name, str(plan_price)],
+            cmd,
             capture_output=True,
             text=True,
             timeout=600,  # 10 min — Cardano tx confirmation
@@ -845,9 +885,12 @@ def finalize_plan(config: dict) -> tuple[bool, Optional[str]]:
         if result.returncode != 0:
             return False, f"Plan creation failed: {result.stderr or result.stdout}"
 
+        mode_label = f"TESTING MODE: {interval_slots} slots/interval" if testing else f"{interval_slots} slots/interval (~1 day)"
         config["_step_result_plan"] = {
             "plan_name": plan_name,
             "price": f"{plan_price} cents/day",
+            "interval_slots": interval_slots,
+            "mode": mode_label,
         }
         return True, None
     except FileNotFoundError:

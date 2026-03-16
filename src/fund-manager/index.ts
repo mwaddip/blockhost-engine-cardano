@@ -26,16 +26,27 @@ import {
   sendRemainderToAdmin,
 } from "./distribution.js";
 
+import * as fs from "fs";
+
 let fundCycleInProgress = false;
+
+const TESTING_MODE_FILE = "/etc/blockhost/.testing-mode";
+const testingMode = fs.existsSync(TESTING_MODE_FILE);
 
 // ── Scheduling helpers ────────────────────────────────────────────────────────
 
 /**
  * Check if the fund cycle is due to run based on its configured interval.
+ *
+ * Testing mode: runs every 30 seconds instead of the configured interval.
  */
 export function shouldRunFundCycle(): boolean {
-  const config = loadFundManagerConfig();
   const state = loadState();
+  if (testingMode) {
+    // Run every 30 seconds in testing mode
+    return Date.now() - state.last_fund_cycle >= 30_000;
+  }
+  const config = loadFundManagerConfig();
   const intervalMs = config.fund_cycle_interval_hours * 3_600_000;
   return Date.now() - state.last_fund_cycle >= intervalMs;
 }

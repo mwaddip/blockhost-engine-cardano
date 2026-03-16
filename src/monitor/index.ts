@@ -26,10 +26,17 @@ import {
   loadAdminConfig,
 } from "../admin/index.js";
 
+// ── Testing mode ──────────────────────────────────────────────────────────────
+
+import * as fs from "fs";
+
+const TESTING_MODE_FILE = "/etc/blockhost/.testing-mode";
+const testingMode = fs.existsSync(TESTING_MODE_FILE);
+
 // ── Intervals ─────────────────────────────────────────────────────────────────
 
-const POLL_INTERVAL_MS = 30_000;        // 30 seconds between beacon scans
-const RECONCILE_INTERVAL_MS = 3_600_000; // 1 hour
+const POLL_INTERVAL_MS = testingMode ? 5_000 : 30_000;               // 5s test / 30s prod
+const RECONCILE_INTERVAL_MS = testingMode ? 60_000 : 3_600_000;      // 1min test / 1hr prod
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -154,6 +161,10 @@ function setupShutdown(): void {
 async function main(): Promise<void> {
   console.log("==============================================");
   console.log("  BlockHost Cardano Monitor");
+  if (testingMode) {
+    console.log("  *** TESTING MODE ACTIVE ***");
+    console.log(`  Poll: ${POLL_INTERVAL_MS / 1000}s | Reconcile: ${RECONCILE_INTERVAL_MS / 1000}s | Fund: 30s`);
+  }
   console.log("==============================================");
 
   setupShutdown();
