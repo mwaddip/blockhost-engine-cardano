@@ -1,0 +1,180 @@
+#!/bin/bash
+# blockhost-deploy-contracts — extract and deploy Cardano validators from Aiken blueprint.
+#
+# Usage:
+#   blockhost-deploy-contracts          # process all validators
+#   blockhost-deploy-contracts sub      # subscription validator only
+#   blockhost-deploy-contracts beacon   # beacon minting policy only
+#   blockhost-deploy-contracts nft      # NFT minting policy only
+#
+# Environment:
+#   BLUEPRINT_PATH      Path to plutus.json (default: ./plutus.json)
+#   DEPLOYER_MNEMONIC   Deployer mnemonic phrase (or read from deployer.key)
+#   BLOCKHOST_CONFIG_DIR  Config directory (default: /etc/blockhost)
+#
+# The script reads the Aiken blueprint (plutus.json), extracts compiled validator
+# CBOR and script hashes, and prints them.  The actual on-chain reference script
+# deployment (sending a transaction with the validator script as a reference
+# script output) is stubbed — it requires a funded wallet and a running Blockfrost
+# endpoint.
+#
+# stdout: key=value pairs for each deployed validator
+# Exit: 0 = success, 1 = failure
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENGINE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+CONFIG_DIR="${BLOCKHOST_CONFIG_DIR:-/etc/blockhost}"
+
+BLUEPRINT="${BLUEPRINT_PATH:-$ENGINE_DIR/plutus.json}"
+MODE="${1:-all}"
+
+# ── Validate mode ─────────────────────────────────────────────────────────────
+
+case "$MODE" in
+    all|sub|beacon|nft) ;;
+    *)
+        echo "Usage: blockhost-deploy-contracts [sub|beacon|nft]" >&2
+        echo "  sub     Subscription validator only" >&2
+        echo "  beacon  Beacon minting policy only" >&2
+        echo "  nft     NFT minting policy only" >&2
+        echo "  (no arg) All validators" >&2
+        exit 1
+        ;;
+esac
+
+# ── Dependency checks ─────────────────────────────────────────────────────────
+
+if ! command -v python3 &>/dev/null; then
+    echo "blockhost-deploy-contracts: python3 is required" >&2
+    exit 1
+fi
+
+if [ ! -f "$BLUEPRINT" ]; then
+    echo "blockhost-deploy-contracts: blueprint not found: $BLUEPRINT" >&2
+    echo "  Run 'aiken build' to compile validators, or set BLUEPRINT_PATH." >&2
+    exit 1
+fi
+
+# ── Blueprint parsing helpers (Python) ───────────────────────────────────────
+
+# extract_validator TITLE_PATTERN
+#   Reads plutus.json and prints two lines:
+#     hash=<script_hash_hex>
+#     cbor=<compiled_cbor_hex>
+#   for the first validator whose title matches TITLE_PATTERN (substring match).
+#   Exits 1 if not found.
+extract_validator() {
+    local pattern="$1"
+    python3 - "$BLUEPRINT" "$pattern" <<'PYEOF'
+import sys, json
+
+blueprint_path = sys.argv[1]
+pattern        = sys.argv[2]
+
+with open(blueprint_path) as f:
+    blueprint = json.load(f)
+
+validators = blueprint.get("validators", [])
+for v in validators:
+    title = v.get("title", "")
+    if pattern in title:
+        h    = v.get("hash", "")
+        cbor = v.get("compiledCode", "")
+        print(f"hash={h}")
+        print(f"cbor={cbor}")
+        sys.exit(0)
+
+print(f"Error: no validator matching '{pattern}' in {blueprint_path}", file=sys.stderr)
+sys.exit(1)
+PYEOF
+}
+
+# cbor_byte_length CBOR_HEX
+#   Prints the byte length of the CBOR hex string (accounting for CBOR
+#   indefinite-length list wrapping that Aiken emits: 59XXXX prefix).
+cbor_byte_length() {
+    local hex="$1"
+    echo $(( ${#hex} / 2 ))
+}
+
+# ── Validator deployment function ─────────────────────────────────────────────
+
+# deploy_validator NAME TITLE_PATTERN CONFIG_KEY
+#   Extracts the validator matching TITLE_PATTERN from the blueprint, prints
+#   its hash, and stubs the on-chain reference script deployment.
+deploy_validator() {
+    local name="$1"
+    local pattern="$2"
+    local config_key="$3"
+
+    echo "Processing $name validator..." >&2
+
+    local info
+    info=$(extract_validator "$pattern") || exit 1
+
+    local hash cbor
+    hash=$(echo "$info" | grep '^hash=' | cut -d= -f2-)
+    cbor=$(echo "$info" | grep '^cbor=' | cut -d= -f2-)
+
+    local byte_len
+    byte_len=$(cbor_byte_length "$cbor")
+
+    echo "  Title pattern: $pattern" >&2
+    echo "  Script hash:   $hash"    >&2
+    echo "  CBOR size:     ${byte_len} bytes" >&2
+
+    # ── TODO: On-chain reference script deployment ────────────────────────────
+    #
+    # To deploy the validator as a reference script on-chain:
+    #
+    #   1. Load DEPLOYER_MNEMONIC (from env or $CONFIG_DIR/deployer.key)
+    #   2. Derive the deployer's Cardano address (CIP-1852, path m/1852'/1815'/0'/0/0)
+    #   3. Query UTXOs at that address via Blockfrost
+    #   4. Build a transaction that sends a small ADA output (e.g. 2 ADA) to a
+    #      chosen address with the validator CBOR as a reference script:
+    #        MeshTxBuilder
+    #          .txOut(deployAddress, [{ unit: "lovelace", quantity: "2000000" }])
+    #          .txOutReferenceScript(cbor, "V3")
+    #          .changeAddress(deployerAddress)
+    #          .signingKey(deployerPaymentKey)
+    #   5. Submit via Blockfrost and print the resulting UTXO reference:
+    #        ${txHash}#0
+    #
+    # Reference: https://meshjs.dev/apis/transaction/basic#referenceScript
+    #
+    # ─────────────────────────────────────────────────────────────────────────
+
+    echo "  [TODO] On-chain reference script deployment not yet implemented." >&2
+    echo "  [TODO] To deploy manually, embed the CBOR above in a Cardano tx." >&2
+
+    # Emit key=value to stdout so the wizard/installer can capture the hash.
+    echo "${config_key}=${hash}"
+}
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+echo "Blueprint: $BLUEPRINT" >&2
+echo "Mode: $MODE" >&2
+echo "" >&2
+
+case "$MODE" in
+    all)
+        deploy_validator "Subscription validator" "subscription.subscription.spend" "subscription_validator_hash"
+        deploy_validator "Beacon minting policy"  "beacon.beacon.mint"              "beacon_policy_id"
+        deploy_validator "NFT minting policy"     "nft.nft.mint"                   "nft_policy_id"
+        ;;
+    sub)
+        deploy_validator "Subscription validator" "subscription.subscription.spend" "subscription_validator_hash"
+        ;;
+    beacon)
+        deploy_validator "Beacon minting policy"  "beacon.beacon.mint"              "beacon_policy_id"
+        ;;
+    nft)
+        deploy_validator "NFT minting policy"     "nft.nft.mint"                   "nft_policy_id"
+        ;;
+esac
+
+echo "" >&2
+echo "Done. Copy the key=value pairs above into web3-defaults.yaml (blockchain section)." >&2

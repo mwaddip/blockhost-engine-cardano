@@ -1,0 +1,271 @@
+#!/usr/bin/env -S npx tsx
+/**
+ * blockhost-mint-nft — Mint a CIP-68 access credential NFT on Cardano.
+ *
+ * Called by the provisioner after VM creation to issue an NFT that
+ * carries the encrypted connection details for the subscriber.
+ *
+ * Usage:
+ *   blockhost-mint-nft --owner-wallet <bech32>
+ *   blockhost-mint-nft --owner-wallet <bech32> --user-encrypted <hex>
+ *   blockhost-mint-nft --owner-wallet <bech32> --user-encrypted <hex> --dry-run
+ *
+ * Config:
+ *   Reads blockchain settings from /etc/blockhost/web3-defaults.yaml
+ *   Reads deployer mnemonic from DEPLOYER_MNEMONIC env var or /etc/blockhost/deployer.key
+ *   Reads/writes token counter from /var/lib/blockhost/next-nft-id
+ *
+ * stdout: token ID (integer) on success
+ * stderr: progress / error messages
+ * Exit: 0 = success, 1 = failure
+ */
+
+import * as fs from "node:fs";
+import * as yaml from "js-yaml";
+import { deriveWallet } from "../src/cardano/wallet.js";
+import { getBlockfrost, submitTx } from "../src/cardano/provider.js";
+import { userTokenAssetName, referenceTokenAssetName } from "../src/nft/mint.js";
+import type { CardanoNetwork } from "../src/cardano/types.js";
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+const CONFIG_DIR  = process.env["BLOCKHOST_CONFIG_DIR"] ?? "/etc/blockhost";
+const STATE_DIR   = process.env["BLOCKHOST_STATE_DIR"]  ?? "/var/lib/blockhost";
+const KEY_PATH    = `${CONFIG_DIR}/deployer.key`;
+const COUNTER_PATH = `${STATE_DIR}/next-nft-id`;
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+interface Args {
+  ownerWallet:   string;
+  userEncrypted: string;
+  dryRun:        boolean;
+}
+
+interface Web3Yaml {
+  blockchain?: {
+    blockfrost_project_id?: string;
+    network?: string;
+    nft_policy_id?: string;
+    subscription_validator_address?: string;
+  };
+}
+
+interface Web3Config {
+  blockfrostProjectId: string;
+  network: CardanoNetwork;
+  nftPolicyId: string;
+  referenceScriptAddress: string;
+}
+
+// ── Argument parsing ──────────────────────────────────────────────────────────
+
+function parseArgs(): Args {
+  const argv = process.argv.slice(2);
+  let ownerWallet   = "";
+  let userEncrypted = "";
+  let dryRun        = false;
+
+  for (let i = 0; i < argv.length; i++) {
+    switch (argv[i]) {
+      case "--owner-wallet":
+        ownerWallet = argv[++i] ?? "";
+        break;
+      case "--user-encrypted":
+        userEncrypted = argv[++i] ?? "";
+        break;
+      case "--dry-run":
+        dryRun = true;
+        break;
+      default:
+        process.stderr.write(`blockhost-mint-nft: unknown argument: ${argv[i]}\n`);
+        process.exit(1);
+    }
+  }
+
+  if (!ownerWallet) {
+    process.stderr.write(
+      "blockhost-mint-nft: --owner-wallet is required\n" +
+      "Usage: blockhost-mint-nft --owner-wallet <bech32> [--user-encrypted <hex>] [--dry-run]\n",
+    );
+    process.exit(1);
+  }
+
+  // Basic bech32 sanity — addr1... (mainnet) or addr_test1... (testnet)
+  if (!/^addr(_test)?1[a-z0-9]+$/.test(ownerWallet)) {
+    process.stderr.write(
+      "blockhost-mint-nft: --owner-wallet must be a bech32 Cardano address (addr1... or addr_test1...)\n",
+    );
+    process.exit(1);
+  }
+
+  if (userEncrypted && !/^[0-9a-fA-F]+$/.test(userEncrypted)) {
+    process.stderr.write("blockhost-mint-nft: --user-encrypted must be a hex string\n");
+    process.exit(1);
+  }
+
+  return { ownerWallet, userEncrypted, dryRun };
+}
+
+// ── Config loading ────────────────────────────────────────────────────────────
+
+function loadConfig(): Web3Config {
+  const cfgPath = `${CONFIG_DIR}/web3-defaults.yaml`;
+  if (!fs.existsSync(cfgPath)) {
+    process.stderr.write(`blockhost-mint-nft: config not found: ${cfgPath}\n`);
+    process.exit(1);
+  }
+
+  const raw = yaml.load(fs.readFileSync(cfgPath, "utf8")) as Web3Yaml;
+  const bc  = raw.blockchain;
+
+  if (!bc?.blockfrost_project_id) {
+    process.stderr.write("blockhost-mint-nft: blockchain.blockfrost_project_id not set\n");
+    process.exit(1);
+  }
+  if (!bc.nft_policy_id || !/^[0-9a-fA-F]{56}$/.test(bc.nft_policy_id)) {
+    process.stderr.write("blockhost-mint-nft: blockchain.nft_policy_id not set or invalid (need 56 hex chars)\n");
+    process.exit(1);
+  }
+
+  const networkRaw = (bc.network ?? "preprod").toLowerCase();
+  const network: CardanoNetwork =
+    networkRaw === "mainnet" ? "mainnet" :
+    networkRaw === "preview"  ? "preview"  : "preprod";
+
+  return {
+    blockfrostProjectId: bc.blockfrost_project_id,
+    network,
+    nftPolicyId: bc.nft_policy_id,
+    referenceScriptAddress: bc.subscription_validator_address ?? "",
+  };
+}
+
+// ── Mnemonic loading ──────────────────────────────────────────────────────────
+
+function loadMnemonic(): string {
+  const fromEnv = process.env["DEPLOYER_MNEMONIC"];
+  if (fromEnv) return fromEnv.trim();
+
+  if (!fs.existsSync(KEY_PATH)) {
+    process.stderr.write(
+      `blockhost-mint-nft: set DEPLOYER_MNEMONIC or create ${KEY_PATH}\n`,
+    );
+    process.exit(1);
+  }
+  return fs.readFileSync(KEY_PATH, "utf8").trim();
+}
+
+// ── Token ID counter ──────────────────────────────────────────────────────────
+
+/**
+ * Read, increment, and write back the NFT token ID counter.
+ * Returns the allocated token ID (the value *before* incrementing).
+ *
+ * The counter file contains a single decimal integer.
+ * If it does not exist, we start at 1.
+ */
+function allocateTokenId(): number {
+  // Ensure state directory exists.
+  if (!fs.existsSync(STATE_DIR)) {
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+  }
+
+  let current = 1;
+  if (fs.existsSync(COUNTER_PATH)) {
+    const raw = fs.readFileSync(COUNTER_PATH, "utf8").trim();
+    const parsed = parseInt(raw, 10);
+    if (!isNaN(parsed) && parsed > 0) {
+      current = parsed;
+    }
+  }
+
+  // Write next value immediately so a crash does not re-use this ID.
+  fs.writeFileSync(COUNTER_PATH, String(current + 1), { encoding: "utf8" });
+  return current;
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────────
+
+async function main(): Promise<void> {
+  const { ownerWallet, userEncrypted, dryRun } = parseArgs();
+  const cfg      = loadConfig();
+  const mnemonic = loadMnemonic();
+
+  // Derive deployer wallet (used for tx signing / fee payment)
+  process.stderr.write("Deriving deployer wallet...\n");
+  const wallet = await deriveWallet(mnemonic, cfg.network);
+  process.stderr.write(`Deployer address: ${wallet.address}\n`);
+
+  // Allocate sequential token ID from counter file
+  const tokenId = allocateTokenId();
+  process.stderr.write(`Allocated token ID: ${tokenId}\n`);
+
+  // Compute CIP-68 asset names
+  const userAssetName = userTokenAssetName(tokenId);       // (222) user token
+  const refAssetName  = referenceTokenAssetName(tokenId);  // (100) reference token
+
+  process.stderr.write(`Policy ID:            ${cfg.nftPolicyId}\n`);
+  process.stderr.write(`User token asset:     ${cfg.nftPolicyId}${userAssetName}\n`);
+  process.stderr.write(`Reference token asset: ${cfg.nftPolicyId}${refAssetName}\n`);
+  process.stderr.write(`Owner wallet:         ${ownerWallet}\n`);
+  process.stderr.write(`Reference address:    ${cfg.referenceScriptAddress || "(not set)"}\n`);
+  process.stderr.write(`User encrypted:       ${userEncrypted || "(none)"}\n`);
+  process.stderr.write(`Network:              ${cfg.network}\n`);
+
+  if (dryRun) {
+    process.stderr.write("[DRY RUN] Would build and submit mint transaction — not broadcasting\n");
+    process.stderr.write("[DRY RUN] Transaction details:\n");
+    process.stderr.write(`  Mint: 1x ${cfg.nftPolicyId}${userAssetName} → ${ownerWallet}\n`);
+    process.stderr.write(`  Mint: 1x ${cfg.nftPolicyId}${refAssetName} → ${cfg.referenceScriptAddress || ownerWallet}\n`);
+    if (userEncrypted) {
+      process.stderr.write(`  Inline datum (reference token): { userEncrypted: "${userEncrypted}" }\n`);
+    }
+    process.stderr.write(`  Signed by: ${wallet.address}\n`);
+    // Print token ID to stdout — pipeline reads this
+    process.stdout.write(`${tokenId}\n`);
+    return;
+  }
+
+  // ── TODO: Full MeshJS transaction building ────────────────────────────────
+  //
+  // Building a CIP-68 NFT mint transaction requires:
+  //   1. A reference script UTXO containing the compiled NFT minting policy
+  //      (from plutus.json, applied to server_key_hash parameter)
+  //   2. MeshJS MeshTxBuilder to compose the transaction:
+  //       .mint("1", policyId, userAssetName)
+  //       .mint("1", policyId, refAssetName)
+  //       .mintingScript(policyCompiledCode)
+  //       .mintRedeemerValue(mConStr0([]))          // MintNft redeemer (index 0)
+  //       .txOut(ownerWallet, [{ unit: policyId+userAssetName, quantity: "1" }])
+  //       .txOut(referenceScriptAddress, [{ unit: policyId+refAssetName, quantity: "1" }])
+  //       .txOutInlineDatumValue(userEncryptedDatum) // CIP-68 datum
+  //       .changeAddress(wallet.address)
+  //       .signingKey(wallet.paymentKey)
+  //   3. Submit the signed transaction CBOR via Blockfrost.
+  //
+  // This requires the NFT policy to be applied to the server_key_hash parameter
+  // offline (using @meshsdk/core applyParamsToScript), and a funded deployer UTXO.
+  //
+  // Reference: https://meshjs.dev/apis/transaction/minting
+  //
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  process.stderr.write(
+    "blockhost-mint-nft: full transaction building not yet implemented.\n" +
+    "Re-run with --dry-run to test the allocation pipeline, or implement\n" +
+    "the MeshJS transaction building section above.\n",
+  );
+
+  // Initialise the Blockfrost client to validate credentials early.
+  const _bf = getBlockfrost(cfg.blockfrostProjectId, cfg.network);
+  void _bf; // will be used by submitTx once tx building is implemented
+  void submitTx; // referenced to avoid dead-code lint errors
+
+  process.exit(1);
+}
+
+main().catch((err: unknown) => {
+  process.stderr.write(`blockhost-mint-nft: ${String(err instanceof Error ? err.message : err)}\n`);
+  process.exit(1);
+});
