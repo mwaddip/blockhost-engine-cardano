@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "meshjs-cardano": {
+      "source": "flux-point-studios/cardano-agent-skills",
+      "sourceType": "github",
+      "computedHash": "f997e603baca4a8223c91582ac72aa1d65bdb4906033d446eb86b8fc8ac17168"
+    }
+  }
+}
