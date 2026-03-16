@@ -12,7 +12,11 @@ import { BlockFrostAPI } from "@blockfrost/blockfrost-js";
 import { loadWeb3Config } from "../fund-manager/web3-config.js";
 import { getBlockfrost } from "../cardano/provider.js";
 import { scanBeacons, type ScanDiff } from "./scanner.js";
-import type { TrackedSubscription } from "./scanner.js";
+import {
+  handleSubscriptionCreated,
+  handleSubscriptionExtended,
+  handleSubscriptionRemoved,
+} from "../handlers/index.js";
 
 // ── Intervals ─────────────────────────────────────────────────────────────────
 
@@ -25,36 +29,6 @@ const FUND_CYCLE_INTERVAL_MS = 86_400_000; // 24 hours
 let running = true;
 let lastReconcile = 0;
 let lastFundCycle = 0;
-
-// ── Dispatch stubs (replaced by Task 4 handlers) ──────────────────────────────
-
-async function handleSubscriptionCreated(sub: TrackedSubscription): Promise<void> {
-  console.log(
-    `[MONITOR] New subscription: beacon=${sub.beaconName} utxo=${sub.utxoRef}` +
-    ` planId=${sub.datum.planId} expiry=${sub.datum.expiry} subscriber=${sub.datum.subscriber}`,
-  );
-  // TODO (Task 4): provision VM, mint NFT, write state
-}
-
-async function handleSubscriptionExtended(
-  old: TrackedSubscription,
-  updated: TrackedSubscription,
-): Promise<void> {
-  console.log(
-    `[MONITOR] Subscription extended: beacon=${updated.beaconName}` +
-    ` old_utxo=${old.utxoRef} new_utxo=${updated.utxoRef}` +
-    ` new_expiry=${updated.datum.expiry}`,
-  );
-  // TODO (Task 4): update expiry in DB, schedule new teardown timer
-}
-
-async function handleSubscriptionRemoved(sub: TrackedSubscription): Promise<void> {
-  console.log(
-    `[MONITOR] Subscription removed: beacon=${sub.beaconName} utxo=${sub.utxoRef}` +
-    ` planId=${sub.datum.planId} subscriber=${sub.datum.subscriber}`,
-  );
-  // TODO (Task 4): collect/cancel handler — suspend or destroy VM
-}
 
 // ── Periodic tasks ────────────────────────────────────────────────────────────
 
