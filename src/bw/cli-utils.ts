@@ -8,8 +8,6 @@ import * as fs from "fs";
 import * as yaml from "js-yaml";
 import type { BlockFrostAPI } from "@blockfrost/blockfrost-js";
 import { getBlockfrost } from "../cardano/provider.js";
-import { deriveWallet } from "../cardano/wallet.js";
-import type { CardanoWallet } from "../cardano/wallet.js";
 import { isValidAddress } from "../cardano/address.js";
 import type { AssetId } from "../cardano/types.js";
 import { loadNetworkConfig } from "../fund-manager/web3-config.js";
@@ -133,22 +131,8 @@ function resolveStableToken(): AssetId {
  *
  * Throws if the role has no keyfile or if the mnemonic is invalid.
  */
-export async function loadWalletFromRole(
-  role: string,
-  book: Addressbook,
-): Promise<CardanoWallet> {
-  const entry: AddressbookEntry | undefined = book[role];
-  if (!entry) {
-    throw new Error(`Role '${role}' not found in addressbook`);
-  }
-  if (!entry.keyfile) {
-    throw new Error(`Role '${role}' has no keyfile — cannot sign`);
-  }
-
-  const mnemonic = fs.readFileSync(entry.keyfile, "utf8").trim();
-  const { network } = loadNetworkConfig();
-  return deriveWallet(mnemonic, network);
-}
+// Wallet loading now uses Lucid Evolution's fromSeed() via lucid-helpers.ts.
+// See initLucidWithWallet() for the replacement.
 
 // ── Blockfrost client ─────────────────────────────────────────────────────────
 

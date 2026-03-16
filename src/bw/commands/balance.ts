@@ -12,16 +12,15 @@
  * Core function executeBalance() is used by fund-manager as well.
  */
 
-import type { BlockFrostAPI } from "@blockfrost/blockfrost-js";
 import type { Addressbook } from "../../fund-manager/types.js";
 import type { AssetId } from "../../cardano/types.js";
 import {
   resolveAddress,
   resolveToken,
-  getBlockfrostClient,
   formatAda,
   formatToken,
 } from "../cli-utils.js";
+import { initLucid } from "../lucid-helpers.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -46,23 +45,28 @@ export async function executeBalance(
   roleOrAddr: string,
   tokenArg: string | undefined,
   book: Addressbook,
-  client?: BlockFrostAPI,
 ): Promise<BalanceResult> {
   const address = resolveAddress(roleOrAddr, book);
-  const bf = client ?? getBlockfrostClient();
+  const lucid = await initLucid();
 
-  // Fetch address info from Blockfrost
-  let amounts: Array<{ unit: string; quantity: string }>;
+  // Fetch UTXOs and sum balances
+  let amounts: Array<{ unit: string; quantity: string }> = [];
   try {
-    const info = await bf.addresses(address);
-    amounts = info.amount as Array<{ unit: string; quantity: string }>;
-  } catch (err: unknown) {
-    if (isNotFound(err)) {
-      // Address exists but has never received funds — treat as zero
-      amounts = [];
-    } else {
-      throw err;
+    const utxos = await lucid.utxosAt(address);
+    // Aggregate all assets across UTXOs
+    const totals = new Map<string, bigint>();
+    for (const utxo of utxos) {
+      for (const [unit, qty] of Object.entries(utxo.assets)) {
+        totals.set(unit, (totals.get(unit) ?? 0n) + qty);
+      }
     }
+    amounts = Array.from(totals.entries()).map(([unit, qty]) => ({
+      unit,
+      quantity: qty.toString(),
+    }));
+  } catch {
+    // Address not found or no UTXOs — treat as zero
+    amounts = [];
   }
 
   // ADA balance
@@ -123,11 +127,3 @@ export async function balanceCommand(
 
 // ── Utility ───────────────────────────────────────────────────────────────────
 
-function isNotFound(err: unknown): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    "status_code" in err &&
-    (err as { status_code: number }).status_code === 404
-  );
-}
