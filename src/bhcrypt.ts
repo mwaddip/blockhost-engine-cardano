@@ -15,13 +15,13 @@
  */
 
 import { eciesDecrypt, symmetricEncrypt, symmetricDecrypt } from "./crypto.js";
-import { deriveWallet } from "./cardano/wallet.js";
 import type { CardanoNetwork } from "./cardano/types.js";
 import { secp256k1 } from "@noble/curves/secp256k1";
 import { bytesToHex } from "@noble/hashes/utils";
 import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import { generateMnemonic, validateMnemonic } from "bip39";
+import { Lucid, Koios } from "@lucid-evolution/lucid";
 
 function parseArgs(args: string[]): { command: string; flags: Record<string, string> } {
   const command = args[0] ?? "";
@@ -62,6 +62,41 @@ function resolveNetwork(name: string): CardanoNetwork {
 }
 
 const { command, flags } = parseArgs(process.argv.slice(2));
+
+/** Derive a Cardano wallet address from mnemonic using Lucid Evolution. */
+async function deriveWithLucid(
+  mnemonic: string,
+  network: CardanoNetwork,
+): Promise<{ address: string; paymentKeyHash: string; stakeKeyHash: string }> {
+  const lucidNet = network === "mainnet" ? "Mainnet" as const
+    : network === "preview" ? "Preview" as const
+    : "Preprod" as const;
+
+  // Lucid needs a provider even for offline wallet derivation.
+  // Use Koios (free, no API key) so keygen works without any config.
+  const koiosUrl = network === "mainnet"
+    ? "https://api.koios.rest/api/v1"
+    : network === "preview"
+      ? "https://preview.koios.rest/api/v1"
+      : "https://preprod.koios.rest/api/v1";
+  const lucid = await Lucid(new Koios(koiosUrl), lucidNet);
+  lucid.selectWallet.fromSeed(mnemonic);
+
+  const addr = await lucid.wallet().address();
+
+  // Extract key hashes from the address via Lucid utilities
+  let paymentKeyHash = "";
+  let stakeKeyHash = "";
+  try {
+    const { paymentCredential, stakeCredential } = (await import("@lucid-evolution/lucid")).getAddressDetails(addr);
+    paymentKeyHash = paymentCredential?.hash ?? "";
+    stakeKeyHash = stakeCredential?.hash ?? "";
+  } catch {
+    // Fallback: return empty hashes
+  }
+
+  return { address: addr, paymentKeyHash, stakeKeyHash };
+}
 
 async function main(): Promise<void> {
   switch (command) {
@@ -128,16 +163,14 @@ async function main(): Promise<void> {
     }
 
     case "keygen": {
-      // Generate BIP39 mnemonic + derive Cardano wallet.
+      // Generate BIP39 mnemonic + derive Cardano wallet via Lucid.
       const net = resolveNetwork(flags["network"] ?? "preprod");
-      const mnemonic = generateMnemonic();
-      const wallet = await deriveWallet(mnemonic, net);
+      const mnemonic = generateMnemonic(256); // 24 words
+      const info = await deriveWithLucid(mnemonic, net);
       process.stdout.write(
         JSON.stringify({
           mnemonic,
-          address: wallet.address,
-          paymentKeyHash: wallet.paymentKeyHash,
-          stakeKeyHash: wallet.stakeKeyHash,
+          ...info,
           network: net,
         }) + "\n",
       );
@@ -149,12 +182,10 @@ async function main(): Promise<void> {
       if (!mnemonic) die("MNEMONIC environment variable not set");
       if (!validateMnemonic(mnemonic)) die("invalid mnemonic phrase");
       const net = resolveNetwork(flags["network"] ?? "preprod");
-      const wallet = await deriveWallet(mnemonic, net);
+      const info = await deriveWithLucid(mnemonic, net);
       process.stdout.write(
         JSON.stringify({
-          address: wallet.address,
-          paymentKeyHash: wallet.paymentKeyHash,
-          stakeKeyHash: wallet.stakeKeyHash,
+          ...info,
           network: net,
         }) + "\n",
       );
