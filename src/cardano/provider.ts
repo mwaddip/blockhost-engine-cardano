@@ -52,25 +52,56 @@ class KoiosProvider implements CardanoProvider {
   readonly name = "koios";
   private baseUrl: string;
 
+  /** Max retries on 429 / 5xx before giving up */
+  private static MAX_RETRIES = 4;
+  /** Base delay in ms — doubles on each retry (1s, 2s, 4s, 8s) */
+  private static BASE_DELAY_MS = 1000;
+
   constructor(network: CardanoNetwork) {
     this.baseUrl = KOIOS_URLS[network];
   }
 
   private async request(path: string, options?: RequestInit): Promise<unknown> {
     const url = `${this.baseUrl}${path}`;
-    const res = await fetch(url, {
-      ...options,
-      headers: {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        ...options?.headers,
-      },
-    });
-    if (!res.ok) {
+
+    for (let attempt = 0; attempt <= KoiosProvider.MAX_RETRIES; attempt++) {
+      const res = await fetch(url, {
+        ...options,
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json",
+          ...options?.headers,
+        },
+      });
+
+      if (res.ok) {
+        return res.json();
+      }
+
       if (res.status === 404) return null;
+
+      // Rate limited or server error — retry with exponential backoff
+      if (res.status === 429 || res.status >= 500) {
+        if (attempt < KoiosProvider.MAX_RETRIES) {
+          // Respect Retry-After header if present, otherwise exponential backoff
+          const retryAfter = res.headers.get("Retry-After");
+          const delay = retryAfter
+            ? parseInt(retryAfter, 10) * 1000
+            : KoiosProvider.BASE_DELAY_MS * Math.pow(2, attempt);
+          console.warn(
+            `[KOIOS] ${res.status} on ${path}, retrying in ${delay}ms (attempt ${attempt + 1}/${KoiosProvider.MAX_RETRIES})`,
+          );
+          await new Promise((r) => setTimeout(r, delay));
+          continue;
+        }
+      }
+
+      // Non-retryable error or retries exhausted
       throw new Error(`Koios ${res.status}: ${await res.text()}`);
     }
-    return res.json();
+
+    // Should not reach here, but satisfy TypeScript
+    throw new Error(`Koios: retries exhausted for ${path}`);
   }
 
   private async post(path: string, body: unknown): Promise<unknown> {
