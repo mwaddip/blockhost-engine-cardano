@@ -367,7 +367,7 @@ async function main(): Promise<void> {
   const completed = await tx.complete();
 
   process.stderr.write("Signing transaction...\n");
-  const signed = completed.sign.withWallet();
+  const signed = await completed.sign.withWallet().complete();
 
   process.stderr.write("Submitting transaction...\n");
   const txHash = await signed.submit();
