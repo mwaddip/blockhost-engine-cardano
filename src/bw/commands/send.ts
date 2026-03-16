@@ -2,21 +2,19 @@
  * bw send <amount> <token> <from> <to>
  *
  * Send ADA or native tokens from a signing wallet to a recipient.
- *
- * TODO: Full transaction building requires MeshJS integration and a funded
- * testnet wallet. This stub has the correct interface so fund-manager can
- * import and call executeSend() once the implementation lands.
+ * Uses Lucid Evolution for transaction building and submission.
  *
  * Core function executeSend() is also used by fund-manager.
  */
 
 import type { Addressbook } from "../../fund-manager/types.js";
-import { resolveAddress, resolveToken, loadWalletFromRole } from "../cli-utils.js";
+import { resolveAddress, resolveToken } from "../cli-utils.js";
+import { initLucidWithWallet } from "../lucid-helpers.js";
 
 /**
  * Core send operation — used by both CLI and fund-manager.
  *
- * @param amountStr  Human-readable amount (e.g. "1.5" for 1.5 ADA or tokens)
+ * @param amountStr  Human-readable amount (e.g. "1.5" for 1.5 ADA, or base units for tokens)
  * @param tokenArg   Token shortcut or "policyId.assetName"
  * @param fromRole   Addressbook role (must have keyfile)
  * @param toRole     Addressbook role or bech32 address
@@ -31,25 +29,27 @@ export async function executeSend(
 ): Promise<void> {
   const asset = resolveToken(tokenArg);
   const toAddress = resolveAddress(toRole, book);
-
-  // Validate the from-role has a keyfile (will throw if not)
-  const wallet = await loadWalletFromRole(fromRole, book);
+  const lucid = await initLucidWithWallet(fromRole, book);
 
   const isAda = asset.policyId === "" && asset.assetName === "";
-  const tokenLabel = isAda
-    ? "ADA"
-    : `${asset.policyId.slice(0, 8)}...${asset.assetName}`;
 
-  console.log(
-    `[TODO] Send ${amountStr} ${tokenLabel} from ${wallet.address} to ${toAddress}`,
-  );
-  console.log(
-    "TODO: Full Cardano transaction building requires MeshJS integration.",
-  );
-  console.log(
-    "      Implement once MeshJS TxBuilder is wired and testnet wallet is funded.",
-  );
-  throw new Error("executeSend: not yet implemented (MeshJS tx building pending)");
+  let tx;
+  if (isAda) {
+    const lovelace = BigInt(Math.round(parseFloat(amountStr) * 1_000_000));
+    tx = lucid.newTx().pay.ToAddress(toAddress, { lovelace });
+  } else {
+    const unit = asset.policyId + asset.assetName;
+    const amount = BigInt(amountStr);
+    tx = lucid.newTx().pay.ToAddress(toAddress, {
+      lovelace: 2_000_000n, // min UTXO for token output
+      [unit]: amount,
+    });
+  }
+
+  const completed = await tx.complete();
+  const signed = await completed.sign.withWallet().complete();
+  const txHash = await signed.submit();
+  console.log(txHash);
 }
 
 /**
