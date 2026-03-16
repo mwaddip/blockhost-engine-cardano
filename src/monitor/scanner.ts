@@ -197,43 +197,55 @@ function parseDatumFromUtxo(utxo: BlockfrostUtxo): SubscriptionDatum | null {
     if (!isConstr(raw) || raw.constructor !== 0) return null;
 
     const f = raw.fields;
-    // Expect at least 7 fields
-    if (!f || f.length < 7) return null;
+    // Expect at least 10 fields (updated datum with interval-based collection)
+    if (!f || f.length < 10) return null;
 
-    const [f0, f1, f2, f3, f4, f5, f6] = f as [
-      PlutusValue, PlutusValue, PlutusValue, PlutusValue,
-      PlutusValue, PlutusValue, PlutusValue,
+    const [f0, f1, f2, f3, f4, f5, f6, f7, f8, f9] = f as [
+      PlutusValue, PlutusValue, PlutusValue, PlutusValue, PlutusValue,
+      PlutusValue, PlutusValue, PlutusValue, PlutusValue, PlutusValue,
     ];
 
     const planId = intField(f0);
     if (planId === null) return null;
 
-    const expiry = bigIntField(f1);
-    if (expiry === null) return null;
+    const expirySlot = bigIntField(f1);
+    if (expirySlot === null) return null;
 
     const subscriber = bytesField(f2);
     if (subscriber === null) return null;
 
-    const amountPaid = bigIntField(f3);
-    if (amountPaid === null) return null;
+    const amountRemaining = bigIntField(f3);
+    if (amountRemaining === null) return null;
+
+    const ratePerInterval = bigIntField(f4);
+    if (ratePerInterval === null) return null;
+
+    const intervalSlots = bigIntField(f5);
+    if (intervalSlots === null) return null;
+
+    const lastCollectedSlot = bigIntField(f6);
+    if (lastCollectedSlot === null) return null;
 
     // paymentAsset is Constr 0 [ policyId: Bytes, assetName: Bytes ]
-    if (!isConstr(f4) || f4.constructor !== 0 || f4.fields.length < 2) return null;
-    const policyId = bytesField(f4.fields[0] as PlutusValue);
-    const assetName = bytesField(f4.fields[1] as PlutusValue);
+    if (!isConstr(f7) || f7.constructor !== 0 || f7.fields.length < 2) return null;
+    const policyId = bytesField(f7.fields[0] as PlutusValue);
+    const assetName = bytesField(f7.fields[1] as PlutusValue);
     if (policyId === null || assetName === null) return null;
 
-    const beaconId = bytesField(f5);
+    const beaconId = bytesField(f8);
     if (beaconId === null) return null;
 
-    const userEncrypted = bytesField(f6);
+    const userEncrypted = bytesField(f9);
     if (userEncrypted === null) return null;
 
     return {
       planId: Number(planId),
-      expiry,
+      expirySlot,
       subscriber,
-      amountPaid,
+      amountRemaining,
+      ratePerInterval,
+      intervalSlots,
+      lastCollectedSlot,
       paymentAsset: { policyId, assetName },
       beaconId,
       userEncrypted,

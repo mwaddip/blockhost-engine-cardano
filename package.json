@@ -13,20 +13,22 @@
     "monitor": "npx tsx src/monitor/index.ts"
   },
   "dependencies": {
-    "@meshsdk/core": "^1.8.14",
     "@blockfrost/blockfrost-js": "^6.0.0",
-    "bip39": "^3.1.0",
-    "@stricahq/bip32ed25519": "^1.1.0",
-    "@noble/hashes": "^1.7.0",
+    "@lucid-evolution/lucid": "^0.4.29",
+    "@lucid-evolution/provider": "^0.1.90",
+    "@meshsdk/core": "^1.8.14",
     "@noble/curves": "^1.8.0",
-    "js-yaml": "^4.1.1",
-    "bech32": "^2.0.0"
+    "@noble/hashes": "^1.7.0",
+    "@stricahq/bip32ed25519": "^1.1.0",
+    "bech32": "^2.0.0",
+    "bip39": "^3.1.0",
+    "js-yaml": "^4.1.1"
   },
   "devDependencies": {
-    "typescript": "^5.9.3",
-    "tsx": "^4.21.0",
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "latest",
-    "@types/js-yaml": "^4.0.9"
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
   },
   "engines": {
     "node": ">=22.0.0"

@@ -8,9 +8,12 @@
 /** Subscription datum stored at the validator UTXO */
 export interface SubscriptionDatum {
   planId: number;
-  expiry: bigint;            // PosixTime (milliseconds)
-  subscriber: string;        // bech32 address
-  amountPaid: bigint;        // lovelace or token amount
+  expirySlot: bigint;        // absolute slot number — subscription ends here
+  subscriber: string;        // subscriber payment key hash (hex)
+  amountRemaining: bigint;   // payment token amount still in the UTXO
+  ratePerInterval: bigint;   // cost per collection interval in token base units
+  intervalSlots: bigint;     // collection interval in slots (86400 = ~1 day)
+  lastCollectedSlot: bigint; // slot of last collection (or creation)
   paymentAsset: AssetId;     // policy + name
   beaconId: string;          // beacon minting policy hash (hex)
   userEncrypted: string;     // hex-encoded encrypted data
