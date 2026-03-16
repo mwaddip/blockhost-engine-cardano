@@ -1,0 +1,24 @@
+[Unit]
+Description=Blockhost Subscriptions Monitor (Cardano)
+After=network.target
+Requires=blockhost-root-agent.service
+After=blockhost-root-agent.service
+
+[Service]
+Type=simple
+User=blockhost
+Group=blockhost
+Environment=HOME=/var/lib/blockhost
+EnvironmentFile=-/etc/blockhost/blockhost-env
+ExecStart=/usr/bin/node /usr/share/blockhost/monitor.js
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+ProtectSystem=strict
+PrivateTmp=true
+ReadWritePaths=/var/lib/blockhost
+
+[Install]
+WantedBy=multi-user.target
