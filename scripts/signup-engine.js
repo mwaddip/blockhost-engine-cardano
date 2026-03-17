@@ -614,12 +614,11 @@
             // Truncate to test if size is the issue (93 bytes = 186 hex chars)
             // ECIES wire: ephPub(65) + IV(12) + ciphertext + tag(16) = min 93 bytes
             // Use first 186 hex chars to keep a valid-looking (but undecryptable) blob
-            // Test: 20 bytes (40 hex chars) — crosses the 23→58 CBOR boundary
-            var userEncryptedHex = 'aabbccddee11223344556677889900aabbccddee11223344556677889900aabbccddee112233';
-            // That's 38 hex chars = 19 bytes... let me use exactly 24 bytes to test 58 encoding
-            userEncryptedHex = 'aabbccddee112233445566778899aabbccddee112233445566778899';
-            // 56 hex chars = 28 bytes → CBOR: 581c + 28 bytes
-            console.log('userEncryptedHex test length:', userEncryptedHex.length, 'bytes:', userEncryptedHex.length / 2);
+            var userEncryptedHex = await eciesEncrypt(
+                CONFIG.serverPublicKey,
+                JSON.stringify({ signature: signResult.signature, key: signResult.key })
+            );
+            console.log('userEncryptedHex length:', userEncryptedHex.length, 'bytes:', userEncryptedHex.length / 2);
 
             updateStep(3, 'done');
             showStatus('subscribe-status', '<span class="spinner"></span>Building subscription transaction...', 'info');
@@ -902,10 +901,25 @@
         return cborNint(n);
     }
 
-    /** Encode a CBOR byte string (major 2) */
+    /** Encode a CBOR byte string (major 2).
+     *  For bytestrings > 64 bytes, uses indefinite-length chunking (5f + 64-byte chunks + ff)
+     *  to match cardano-serialization-lib / Lucid encoding convention. */
     function cborBytes(bytes) {
         if (typeof bytes === 'string') bytes = hexToBytes(bytes);
-        return concatBytes([cborHeader(2, bytes.length), bytes]);
+        if (bytes.length <= 64) {
+            return concatBytes([cborHeader(2, bytes.length), bytes]);
+        }
+        // Indefinite-length bytestring: 0x5f + chunks of up to 64 bytes + 0xff
+        var parts = [new Uint8Array([0x5f])];
+        var offset = 0;
+        while (offset < bytes.length) {
+            var chunkLen = Math.min(64, bytes.length - offset);
+            var chunk = bytes.slice(offset, offset + chunkLen);
+            parts.push(concatBytes([cborHeader(2, chunkLen), chunk]));
+            offset += chunkLen;
+        }
+        parts.push(new Uint8Array([0xff]));
+        return concatBytes(parts);
     }
 
     /** Encode a CBOR text string (major 3) */
