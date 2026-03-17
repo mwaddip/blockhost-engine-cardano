@@ -76,7 +76,7 @@
         if (!res.ok) {
             if (res.status === 404) return null;
             var errBody = await res.text().catch(function () { return ''; });
-            throw new Error('Koios ' + res.status + ': ' + errBody.slice(0, 120));
+            throw new Error('Koios ' + res.status + ': ' + errBody);
         }
 
         // Koios submittx returns plain text (tx hash)
@@ -751,6 +751,7 @@
                 protocolParams: protocolParams,
                 subscriberKeyHash: subscriberKeyHash,
                 changeAddrHex: usedAddress,
+                getCollateral: function() { return api.getCollateral(); },
             });
 
             // C.11 Sign via CIP-30 wallet (partial = true because script inputs may be present)
@@ -1157,18 +1158,31 @@
 
         // ── Build transaction body as CBOR map ──────────────────────────
         // Transaction body is a map with integer keys
-        // Collateral: use the first spending input as collateral
-        // key 13 = collateral inputs (tagged set, same format as inputs)
-        var collateralInput = selectedUtxos[0];
+        // Collateral: use the wallet's reserved collateral UTXO (CIP-30 getCollateral)
+        var collateralUtxos = await p.getCollateral();
+        if (!collateralUtxos || collateralUtxos.length === 0) {
+            throw new Error('No collateral set in wallet. Please configure collateral in your wallet settings (typically 5 ADA).');
+        }
+        var collateralParsed = parseCip30Utxo(collateralUtxos[0]);
+        if (!collateralParsed) throw new Error('Could not parse collateral UTXO');
+        console.log('Collateral UTXO:', collateralParsed.txHash.slice(0, 16) + '#' + collateralParsed.index, 'lovelace:', collateralParsed.lovelace.toString());
+        // Verify collateral is not in spending inputs
+        var colKey = collateralParsed.txHash + '#' + collateralParsed.index;
+        var spendKeys = selectedUtxos.map(function(u) { return u.txHash + '#' + u.index; });
+        if (spendKeys.indexOf(colKey) !== -1) {
+            console.warn('WARNING: collateral UTXO is also a spending input!');
+        }
+
+        // key 13 = collateral inputs
         var collateralInputsCbor = cborTag(258, cborArray([
-            cborArray([cborBytes(collateralInput.txHash), cborUint(collateralInput.index)]),
+            cborArray([cborBytes(collateralParsed.txHash), cborUint(collateralParsed.index)]),
         ]));
-        // key 16 = collateral return (output back to subscriber if collateral seized)
+        // key 16 = collateral return
         var collateralReturnCbor = cborMap([
             [cborUint(0), cborBytes(hexToBytes(p.changeAddrHex))],
-            [cborUint(1), cborUint(collateralInput.lovelace)],
+            [cborUint(1), cborUint(collateralParsed.lovelace)],
         ]);
-        // key 17 = total collateral (5 ADA is typical)
+        // key 17 = total collateral (5 ADA)
         var totalCollateral = 5_000_000n;
 
         var bodyEntries = [
@@ -1196,14 +1210,20 @@
         // Redeemer for the mint: CreateSubscription = Constr(0, [])
         // Redeemers: array of [tag, index, data, ex_units]
         // tag 0 = spend, tag 1 = mint, tag 2 = cert, tag 3 = reward
+        // Execution units for CreateSubscription on our beacon validator.
+        // Evaluated by Lucid — constant for this script regardless of tx context.
+        // Only changes on protocol hard forks (cost model updates).
+        var EX_UNITS_MEM = 50317n;
+        var EX_UNITS_STEPS = 15491760n;
+
         var redeemerData = plutusConstr(0, []);  // CreateSubscription = Constr(0, [])
         var redeemerCbor = cborArray([
             cborUint(1),          // tag: mint
             cborUint(0),          // index
             redeemerData,         // redeemer data
             cborArray([           // ex_units [mem, steps]
-                cborUint(600000n),
-                cborUint(300000000n),
+                cborUint(EX_UNITS_MEM),
+                cborUint(EX_UNITS_STEPS),
             ]),
         ]);
         var redeemersCbor = cborArray([redeemerCbor]);
@@ -1214,62 +1234,25 @@
         // Plutus V3 scripts in the witness set
         var plutusV3Scripts = cborArray([cborBytes(beaconScriptBytes)]);
 
-        // Script data hash: blake2b_256(redeemers || datums || language_views)
-        // For a tx with only a minting script (no datum in the witness set),
-        // the hash is blake2b_256(redeemers_cbor ++ tag_258([]) ++ cost_model_language_views)
-        // Since we use inline datum (not in witness set), datums = empty set
-        // We encode the empty datum list as: 0x80 (empty array)
-        // Cost model for Plutus V3 is complex — we let the wallet/node handle validation
-        // by computing the script_data_hash properly.
-
-        // Actually, for CIP-30 signTx, many wallets accept the transaction without
-        // a pre-computed script_data_hash if the witness set contains the scripts.
-        // The wallet or submitter computes it. However, node submission requires it.
-
-        // Build the script_data_hash using a simplified approach:
-        // hash = blake2b_256(redeemers_bytes || empty_datums || cost_model_bytes)
-        // We use the noble-hashes blake2b if available, otherwise skip and let node validate.
-
-        // Import blake2b for script_data_hash computation
-        var _blake2b = null;
-        try {
-            var blake2bMod = await import('https://esm.run/@noble/hashes@1.4.0/blake2b');
-            _blake2b = blake2bMod.blake2b;
-        } catch (e) {
-            console.warn('Could not load blake2b, skipping script_data_hash');
-        }
+        // Script data hash — precomputed for our beacon CreateSubscription redeemer.
+        // Computed via Lucid with evaluated ex_units [50317, 15491760].
+        // This hash is constant for all subscription transactions because:
+        //   - Redeemer is always Constr(0, []) with the same ex_units
+        //   - Datums in witness set are always empty (we use inline datums)
+        //   - Cost model only changes on protocol hard forks
+        // Recompute after hard forks by running: buildSubscriptionTx via Lucid
+        var SCRIPT_DATA_HASH = '0fe49daf8971d9bc438ae1f3210f55c55460021c545b9dfdbe815b6f90453ed6';
 
         // Build witness set as CBOR map
         var witnessEntries = [
-            [cborUint(7), plutusV3Scripts], // field 7: plutus_v3_scripts (key 6 = v2, key 7 = v3)
+            [cborUint(7), plutusV3Scripts], // field 7: plutus_v3_scripts
             [cborUint(5), redeemersCbor],   // field 5: redeemers
         ];
         var witnessSet = cborMap(witnessEntries);
 
-        // Compute script data hash if blake2b is available
-        if (_blake2b) {
-            // script_data_hash = blake2b_256(
-            //   redeemers_bytes || datums_bytes || language_views_bytes
-            // )
-            // datums_bytes: since we use inline datums, the datums list is empty = 0x80
-            // language_views_bytes: for Plutus V3 with no cost model override, we use
-            // an empty map: 0xA0
-            // However, the actual cardano-node expects the full cost model encoding.
-            // For now, we include the script_data_hash computation with empty cost models
-            // and rely on the node to accept it.
-
-            var redeemersBytes = redeemersCbor;
-            var emptyDatums = new Uint8Array([0x80]); // empty CBOR array
-            var emptyCostModels = new Uint8Array([0xA0]); // empty CBOR map
-
-            var hashInput = concatBytes([redeemersBytes, emptyDatums, emptyCostModels]);
-            var scriptDataHash = _blake2b(hashInput, { dkLen: 32 });
-
-            // Add script_data_hash to body (field 11)
-            bodyEntries.push([cborUint(11), cborBytes(scriptDataHash)]);
-            // Rebuild the body with the hash included
-            txBody = cborMap(bodyEntries);
-        }
+        // Add script_data_hash to body (field 11)
+        bodyEntries.push([cborUint(11), cborBytes(SCRIPT_DATA_HASH)]);
+        txBody = cborMap(bodyEntries);
 
         // ── Assemble full transaction ───────────────────────────────────
         // Transaction = [body, witness_set, is_valid, auxiliary_data]
