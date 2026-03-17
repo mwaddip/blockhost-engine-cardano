@@ -32,20 +32,22 @@
 
         <!-- Blockfrost Configuration -->
         <div class="form-section">
-            <h3>Blockfrost API</h3>
+            <h3>Chain Data Provider</h3>
             <p class="text-muted mb-2" style="font-size: 0.875rem;">
-                BlockHost uses <a href="https://blockfrost.io" target="_blank" rel="noopener">Blockfrost</a>
-                as the Cardano chain data provider. Create a free project at blockfrost.io and paste the project ID below.
+                BlockHost uses <a href="https://www.koios.rest/" target="_blank" rel="noopener">Koios</a>
+                by default — a free, decentralised Cardano API that requires no account or API key.
+                Optionally, you can provide a <a href="https://blockfrost.io" target="_blank" rel="noopener">Blockfrost</a>
+                project ID to use Blockfrost instead (useful for higher rate limits).
             </p>
             <div class="form-group">
-                <label for="blockfrost_project_id">Blockfrost Project ID <span style="color: var(--danger);">*</span></label>
+                <label for="blockfrost_project_id">Blockfrost Project ID <span class="text-muted" style="font-size: 0.75rem;">(optional)</span></label>
                 <input type="text" id="blockfrost_project_id" name="blockfrost_project_id"
                        value="{{ blockchain.get('blockfrost_project_id', '') }}"
-                       placeholder="preprod..." required
+                       placeholder="Leave blank to use Koios (free, no API key required)"
                        style="font-family: monospace;">
                 <p class="text-muted mt-1" style="font-size: 0.75rem;">
-                    Format: <code>preprod&lt;32 chars&gt;</code>, <code>preview&lt;32 chars&gt;</code>, or <code>mainnet&lt;32 chars&gt;</code>.
-                    Must match the selected network above.
+                    If provided, format must be: <code>preprod&lt;32 chars&gt;</code>, <code>preview&lt;32 chars&gt;</code>, or <code>mainnet&lt;32 chars&gt;</code>,
+                    matching the selected network above.
                 </p>
             </div>
         </div>
@@ -412,14 +414,6 @@ function validateImportMnemonic() {
 document.getElementById('blockchain-form').addEventListener('submit', function(e) {
     var walletMode = document.querySelector('input[name="wallet_mode"]:checked').value;
     var contractMode = document.querySelector('input[name="contract_mode"]:checked').value;
-
-    // Validate Blockfrost project ID
-    var projectId = document.getElementById('blockfrost_project_id').value.trim();
-    if (!projectId) {
-        e.preventDefault();
-        alert('Please enter a Blockfrost project ID.');
-        return;
-    }
 
     // Validate wallet
     if (walletMode === 'generate') {

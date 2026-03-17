@@ -530,14 +530,12 @@ def finalize_contracts(config: dict) -> tuple[bool, Optional[str]]:
             else:
                 return False, "Deployer mnemonic not available"
 
-        if not blockfrost_project_id:
-            return False, "Blockfrost project ID required for validator deployment"
-
         env = {
             **os.environ,
-            "BLOCKFROST_PROJECT_ID": blockfrost_project_id,
             "CARDANO_NETWORK": network,
         }
+        if blockfrost_project_id:
+            env["BLOCKFROST_PROJECT_ID"] = blockfrost_project_id
 
         deploy_script = Path("/usr/bin/blockhost-deploy-contracts")
         if not deploy_script.exists():
@@ -613,14 +611,16 @@ def finalize_chain_config(config: dict) -> tuple[bool, Optional[str]]:
         bridge = provisioner.get("bridge") or _discover_bridge()
 
         # --- web3-defaults.yaml ---
+        web3_blockchain: dict = {
+            "network": network,
+            "nft_policy_id": nft_policy_id,
+            "subscription_policy_id": sub_policy_id,
+            "server_public_key": server_pubkey,
+        }
+        if blockfrost_project_id:
+            web3_blockchain["blockfrost_project_id"] = blockfrost_project_id
         web3_config: dict = {
-            "blockchain": {
-                "blockfrost_project_id": blockfrost_project_id,
-                "network": network,
-                "nft_policy_id": nft_policy_id,
-                "subscription_policy_id": sub_policy_id,
-                "server_public_key": server_pubkey,
-            },
+            "blockchain": web3_blockchain,
         }
 
         web3_path = CONFIG_DIR / "web3-defaults.yaml"
@@ -710,12 +710,13 @@ def finalize_chain_config(config: dict) -> tuple[bool, Optional[str]]:
         opt_dir = Path("/opt/blockhost")
         opt_dir.mkdir(parents=True, exist_ok=True)
         env_lines = [
-            f"BLOCKFROST_PROJECT_ID={blockfrost_project_id}",
             f"CARDANO_NETWORK={network}",
             f"NFT_POLICY_ID={nft_policy_id}",
             f"SUBSCRIPTION_POLICY_ID={sub_policy_id}",
             "DEPLOYER_KEY_FILE=/etc/blockhost/deployer.key",
         ]
+        if blockfrost_project_id:
+            env_lines.insert(0, f"BLOCKFROST_PROJECT_ID={blockfrost_project_id}")
         env_path = opt_dir / ".env"
         env_path.write_text("\n".join(env_lines) + "\n")
         _set_blockhost_ownership(env_path, 0o640)

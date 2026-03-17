@@ -6,12 +6,12 @@
         <span class="summary-value">{{ engine_summary.network_name }}</span>
     </div>
     <div class="summary-item">
-        <span class="summary-label">Blockfrost Project ID</span>
+        <span class="summary-label">Chain Provider</span>
         <span class="summary-value" style="font-size: 0.75rem; font-family: monospace;">
             {% if engine_summary.blockfrost_project_id %}
-                {{ engine_summary.blockfrost_project_id[:12] }}...
+                Blockfrost ({{ engine_summary.blockfrost_project_id[:12] }}...)
             {% else %}
-                (not set)
+                Koios (default)
             {% endif %}
         </span>
     </div>
