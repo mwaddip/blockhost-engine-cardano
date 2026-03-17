@@ -39,6 +39,8 @@ npx esbuild "$PROJECT_DIR/src/monitor/index.ts" \
     --platform=node \
     --target=node22 \
     --minify \
+    --external:@stricahq/bip32ed25519 \
+    --external:libsodium-wrappers-sumo \
     --outfile="$PKG_DIR/usr/share/blockhost/monitor.js"
 
 if [ ! -f "$PKG_DIR/usr/share/blockhost/monitor.js" ]; then
@@ -56,6 +58,8 @@ npx esbuild "$PROJECT_DIR/src/bw/index.ts" \
     --platform=node \
     --target=node22 \
     --minify \
+    --external:@stricahq/bip32ed25519 \
+    --external:libsodium-wrappers-sumo \
     --outfile="$PKG_DIR/usr/share/blockhost/bw.js"
 
 if [ ! -f "$PKG_DIR/usr/share/blockhost/bw.js" ]; then
@@ -80,6 +84,8 @@ npx esbuild "$PROJECT_DIR/src/ab/index.ts" \
     --platform=node \
     --target=node22 \
     --minify \
+    --external:@stricahq/bip32ed25519 \
+    --external:libsodium-wrappers-sumo \
     --outfile="$PKG_DIR/usr/share/blockhost/ab.js"
 
 if [ ! -f "$PKG_DIR/usr/share/blockhost/ab.js" ]; then
@@ -104,6 +110,8 @@ npx esbuild "$PROJECT_DIR/src/is/index.ts" \
     --platform=node \
     --target=node22 \
     --minify \
+    --external:@stricahq/bip32ed25519 \
+    --external:libsodium-wrappers-sumo \
     --outfile="$PKG_DIR/usr/share/blockhost/is.js"
 
 if [ ! -f "$PKG_DIR/usr/share/blockhost/is.js" ]; then
@@ -128,6 +136,8 @@ npx esbuild "$PROJECT_DIR/src/bhcrypt.ts" \
     --platform=node \
     --target=node22 \
     --minify \
+    --external:@stricahq/bip32ed25519 \
+    --external:libsodium-wrappers-sumo \
     --outfile="$PKG_DIR/usr/share/blockhost/bhcrypt.js"
 
 if [ ! -f "$PKG_DIR/usr/share/blockhost/bhcrypt.js" ]; then
@@ -152,6 +162,8 @@ npx esbuild "$PROJECT_DIR/scripts/mint_nft" \
     --platform=node \
     --target=node22 \
     --minify \
+    --external:@stricahq/bip32ed25519 \
+    --external:libsodium-wrappers-sumo \
     --loader:.ts=ts \
     --outfile="$PKG_DIR/usr/share/blockhost/mint_nft.js"
 
@@ -194,6 +206,8 @@ npx esbuild "$PROJECT_DIR/src/auth-svc/index.ts" \
     --platform=node \
     --target=node22 \
     --minify \
+    --external:@stricahq/bip32ed25519 \
+    --external:libsodium-wrappers-sumo \
     --outfile="$SCRIPT_DIR/auth-svc.js"
 
 if [ ! -f "$SCRIPT_DIR/auth-svc.js" ]; then
