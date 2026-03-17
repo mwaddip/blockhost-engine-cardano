@@ -736,7 +736,7 @@
             //      coin selection, fee estimation, and change via signTx.
             showStatus('subscribe-status', '<span class="spinner"></span>Building transaction...', 'info');
 
-            var txCborHex = await buildSubscriptionTx({
+            var txBuildResult = await buildSubscriptionTx({
                 utxos: utxosRaw,
                 scriptAddrHex: scriptAddrHex,
                 scriptOutputLovelace: scriptOutputLovelace,
@@ -754,33 +754,65 @@
             });
 
             // C.11 Sign via CIP-30 wallet (partial = true because script inputs may be present)
-            console.log('txCborHex length:', txCborHex.length / 2, 'bytes');
+            console.log('txBuildResult.txHex length:', txBuildResult.txHex.length / 2, 'bytes');
 
             // Debug: write tx hex to a file endpoint so it can be retrieved
             try {
                 var debugEl = document.getElementById('result-content');
                 if (debugEl) {
-                    debugEl.innerHTML = '<textarea style="width:100%;height:80px;font-size:10px;background:#111;color:#0f0;border:1px solid #333" onclick="this.select()">' + txCborHex + '</textarea><p style="font-size:11px;color:#888">Copy this hex and send it for debugging</p>';
+                    debugEl.innerHTML = '<textarea style="width:100%;height:80px;font-size:10px;background:#111;color:#0f0;border:1px solid #333" onclick="this.select()">' + txBuildResult.txHex + '</textarea><p style="font-size:11px;color:#888">Copy this hex and send it for debugging</p>';
                     document.getElementById('result-card').classList.remove('hidden');
                 }
             } catch(e) {}
 
             showStatus('subscribe-status', '<span class="spinner"></span>Awaiting wallet signature...', 'info');
-            var signedTxHex = await api.signTx(txCborHex, true);
-            console.log('signedTxHex type:', typeof signedTxHex, 'length:', signedTxHex.length);
-            console.log('signedTxHex first 10:', signedTxHex.slice(0, 10));
+            // C.11 Sign via CIP-30 wallet
+            // CIP-30 signTx ALWAYS returns a witness set (CBOR map), not a full tx.
+            // We merge the wallet's vkey witnesses into our original tx.
+            showStatus('subscribe-status', '<span class="spinner"></span>Awaiting wallet signature...', 'info');
+            var walletWitnessHex = await api.signTx(txBuildResult.txHex, true);
+            console.log('walletWitnessHex length:', walletWitnessHex.length, 'first:', walletWitnessHex.slice(0, 20));
 
-            // C.12 Submit — try wallet's own submitTx first (CIP-30), fall back to Koios
-            showStatus('subscribe-status', '<span class="spinner"></span>Submitting transaction...', 'info');
-            var txHash;
-            try {
-                // CIP-30 submitTx — the wallet submits directly
-                txHash = await api.submitTx(signedTxHex);
-                console.log('Submitted via wallet CIP-30 submitTx');
-            } catch(walletErr) {
-                console.warn('Wallet submitTx failed, trying Koios:', walletErr);
-                txHash = await submitViaKoios(signedTxHex);
+            // Merge: take our original tx body + combine witness sets
+            // Our tx: 84 [body] [our_witnesses] f5 f6
+            // Wallet witness: {0: [[vkey, sig], ...]}
+            // Merged tx: 84 [body] [merged_witnesses] f5 f6
+
+            // Extract vkey witnesses bytes from wallet witness set (key 0 value)
+            // The wallet witness starts with a1 (map of 1) 00 (key 0) then the value
+            var walletWitBytes = hexToBytes(walletWitnessHex);
+            // Find the vkey witnesses: skip the map header + key 0
+            // a1 00 = map(1) key(0), then the value is an array of [vkey, sig] pairs
+            var vkeyWitnessesRaw;
+            if (walletWitBytes[0] === 0xa1 && walletWitBytes[1] === 0x00) {
+                // Simple case: map(1) with key 0 — value starts at byte 2
+                vkeyWitnessesRaw = walletWitnessHex.slice(4); // skip 'a100'
+            } else {
+                // Complex case: use the full wallet witness as-is
+                console.warn('Unexpected wallet witness format, first bytes:', walletWitnessHex.slice(0, 10));
+                vkeyWitnessesRaw = walletWitnessHex;
             }
+
+            // Build merged witness set: {0: vkeys, 5: redeemers, 7: scripts}
+            var mergedWitness = cborMap([
+                [cborUint(0), hexToBytes(vkeyWitnessesRaw)],
+                [cborUint(5), txBuildResult.redeemersCbor],
+                [cborUint(7), txBuildResult.plutusV3Scripts],
+            ]);
+
+            // Reconstruct full tx: [body, mergedWitness, true, null]
+            var signedTx = cborArray([
+                txBuildResult.txBody,
+                mergedWitness,
+                new Uint8Array([0xf5]),  // CBOR true
+                new Uint8Array([0xf6]),  // CBOR null
+            ]);
+            var signedTxHex = bytesToHex(signedTx);
+            console.log('Merged signed tx length:', signedTxHex.length / 2, 'first:', signedTxHex.slice(0, 10));
+
+            // C.12 Submit via Koios
+            showStatus('subscribe-status', '<span class="spinner"></span>Submitting transaction...', 'info');
+            var txHash = await submitViaKoios(signedTxHex);
 
             console.log('Transaction submitted:', txHash);
 
@@ -1033,7 +1065,7 @@
         // ── Coin selection ──────────────────────────────────────────────
         // For ADA payment: we need scriptOutputLovelace + fee + minUtxo for change
         // For token payment: we need minUtxo for script + token amount + fee
-        var estimatedFee = 400000n; // conservative initial estimate (0.4 ADA)
+        var estimatedFee = 1000000n; // 1 ADA — generous for Plutus script tx
         var requiredLovelace = p.scriptOutputLovelace + estimatedFee;
 
         // Sort UTXOs by lovelace descending for greedy selection
@@ -1125,6 +1157,20 @@
 
         // ── Build transaction body as CBOR map ──────────────────────────
         // Transaction body is a map with integer keys
+        // Collateral: use the first spending input as collateral
+        // key 13 = collateral inputs (tagged set, same format as inputs)
+        var collateralInput = selectedUtxos[0];
+        var collateralInputsCbor = cborTag(258, cborArray([
+            cborArray([cborBytes(collateralInput.txHash), cborUint(collateralInput.index)]),
+        ]));
+        // key 16 = collateral return (output back to subscriber if collateral seized)
+        var collateralReturnCbor = cborMap([
+            [cborUint(0), cborBytes(hexToBytes(p.changeAddrHex))],
+            [cborUint(1), cborUint(collateralInput.lovelace)],
+        ]);
+        // key 17 = total collateral (5 ADA is typical)
+        var totalCollateral = 5_000_000n;
+
         var bodyEntries = [
             [cborUint(0), inputsCbor],      // inputs
             [cborUint(1), outputsCbor],      // outputs
@@ -1132,7 +1178,10 @@
             [cborUint(3), ttlCbor],          // ttl
             [cborUint(8), cborUint(validFrom)],  // validity interval start
             [cborUint(9), mintCbor],         // mint
-            [cborUint(14), requiredSignersCbor], // required signers
+            [cborUint(13), collateralInputsCbor], // collateral inputs
+            [cborUint(14), requiredSignersCbor],  // required signers
+            [cborUint(16), collateralReturnCbor], // collateral return
+            [cborUint(17), cborUint(totalCollateral)], // total collateral
         ];
         var txBody = cborMap(bodyEntries);
 
@@ -1145,15 +1194,19 @@
         // Script data hash (field 11 in body) = hash of (redeemers, datums, cost_models)
 
         // Redeemer for the mint: CreateSubscription = Constr(0, [])
-        // Conway-era redeemers: Map<[tag, index], [data, ex_units]>
+        // Redeemers: array of [tag, index, data, ex_units]
         // tag 0 = spend, tag 1 = mint, tag 2 = cert, tag 3 = reward
-        var redeemerData = plutusConstr(0, []);  // CreateSubscription
-        var redeemerKey = cborArray([cborUint(1), cborUint(0)]);  // [mint, index 0]
-        var redeemerVal = cborArray([
-            redeemerData,
-            cborArray([cborUint(600000n), cborUint(300000000n)]),  // ex_units
+        var redeemerData = plutusConstr(0, []);  // CreateSubscription = Constr(0, [])
+        var redeemerCbor = cborArray([
+            cborUint(1),          // tag: mint
+            cborUint(0),          // index
+            redeemerData,         // redeemer data
+            cborArray([           // ex_units [mem, steps]
+                cborUint(600000n),
+                cborUint(300000000n),
+            ]),
         ]);
-        var redeemersCbor = cborMap([[redeemerKey, redeemerVal]]);
+        var redeemersCbor = cborArray([redeemerCbor]);
 
         // Decode the beacon script from hex CBOR (it's a double-encoded CBOR script)
         var beaconScriptBytes = hexToBytes(p.beaconScriptCbor);
@@ -1227,7 +1280,12 @@
             new Uint8Array([0xF6]),     // null (no auxiliary data)
         ]);
 
-        return bytesToHex(txCbor);
+        return {
+            txHex: bytesToHex(txCbor),
+            txBody: txBody,
+            redeemersCbor: redeemersCbor,
+            plutusV3Scripts: plutusV3Scripts,
+        };
     }
 
     /**
