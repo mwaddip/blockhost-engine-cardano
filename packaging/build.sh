@@ -4,19 +4,17 @@ set -e
 
 VERSION="0.1.0"
 PKG_NAME="blockhost-engine-cardano_${VERSION}_all"
-TEMPLATE_PKG_NAME="blockhost-auth-svc_${VERSION}_all"
+# Auth-svc template package removed — now maintained by libpam-web3 plugin
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 PKG_DIR="$SCRIPT_DIR/$PKG_NAME"
-TEMPLATE_PKG_DIR="$SCRIPT_DIR/$TEMPLATE_PKG_NAME"
 
 echo "Building blockhost-engine-cardano v${VERSION}..."
 
 # Clean up build artifacts on exit (success or failure)
 cleanup() {
   rm -rf "$PKG_DIR"
-  rm -rf "$TEMPLATE_PKG_DIR"
-  rm -f "$SCRIPT_DIR/auth-svc.js"
+  # auth-svc cleanup removed — package now maintained by libpam-web3 plugin
 }
 trap cleanup EXIT
 
@@ -195,28 +193,6 @@ if [ -f "$PKG_DIR/usr/share/blockhost/keygen.js" ]; then
 else
     echo "WARNING: Failed to bundle keygen.js"
 fi
-
-# ============================================
-# Bundle auth-svc with esbuild
-# ============================================
-echo ""
-echo "Bundling auth-svc with esbuild..."
-npx esbuild "$PROJECT_DIR/src/auth-svc/index.ts" \
-    --bundle \
-    --platform=node \
-    --target=node22 \
-    --minify \
-    --external:@stricahq/bip32ed25519 \
-    --external:libsodium-wrappers-sumo \
-    --outfile="$SCRIPT_DIR/auth-svc.js"
-
-if [ ! -f "$SCRIPT_DIR/auth-svc.js" ]; then
-    echo "ERROR: Failed to create auth-svc bundle"
-    exit 1
-fi
-
-AUTH_SVC_SIZE=$(du -h "$SCRIPT_DIR/auth-svc.js" | cut -f1)
-echo "auth-svc bundle created: $AUTH_SVC_SIZE"
 
 # ============================================
 # Copy Aiken contract artifacts (plutus.json)
@@ -416,121 +392,6 @@ if [ -d "$(dirname "$PACKAGES_HOST_DIR")" ]; then
     echo "Copied to: $PACKAGES_HOST_DIR/${PKG_NAME}.deb"
 fi
 
-# ============================================
-# Build template package: blockhost-auth-svc
-# (installed on VMs, not the host)
-# ============================================
-echo ""
-echo "=========================================="
-echo "Building template package: blockhost-auth-svc v${VERSION}..."
-echo "=========================================="
-
-rm -rf "$TEMPLATE_PKG_DIR"
-mkdir -p "$TEMPLATE_PKG_DIR"/{DEBIAN,usr/bin,usr/share/blockhost/signing-page,lib/systemd/system,usr/lib/tmpfiles.d}
-
-# Copy bundled JS
-cp "$SCRIPT_DIR/auth-svc.js" "$TEMPLATE_PKG_DIR/usr/share/blockhost/auth-svc.js"
-
-# Create wrapper script
-cat > "$TEMPLATE_PKG_DIR/usr/bin/web3-auth-svc" << 'AUTHEOF'
-#!/bin/sh
-exec /usr/bin/node /usr/share/blockhost/auth-svc.js "$@"
-AUTHEOF
-chmod 755 "$TEMPLATE_PKG_DIR/usr/bin/web3-auth-svc"
-
-# Copy signing page (index.html + engine.js)
-cp "$PROJECT_DIR/auth-svc/signing-page/index.html" "$TEMPLATE_PKG_DIR/usr/share/blockhost/signing-page/index.html"
-cp "$PROJECT_DIR/auth-svc/signing-page/engine.js" "$TEMPLATE_PKG_DIR/usr/share/blockhost/signing-page/engine.js"
-
-# Create systemd unit
-cat > "$TEMPLATE_PKG_DIR/lib/systemd/system/web3-auth-svc.service" << 'SVCEOF'
-[Unit]
-Description=BlockHost Web3 Auth Service (Cardano)
-After=network.target
-
-[Service]
-Type=simple
-User=root
-ExecStart=/usr/bin/web3-auth-svc
-Restart=always
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-SVCEOF
-
-# Create tmpfiles.d config (creates pending dir on boot)
-cat > "$TEMPLATE_PKG_DIR/usr/lib/tmpfiles.d/libpam-web3.conf" << 'TMPEOF'
-d /run/libpam-web3/pending 0755 root root -
-TMPEOF
-
-# Create DEBIAN/control
-cat > "$TEMPLATE_PKG_DIR/DEBIAN/control" << EOF
-Package: blockhost-auth-svc
-Version: ${VERSION}
-Section: admin
-Priority: optional
-Architecture: all
-Depends: nodejs (>= 22)
-Maintainer: Blockhost <admin@blockhost.io>
-Description: Web3 authentication signing server for Blockhost VMs (Cardano)
- HTTPS server that serves the CIP-30 signing page and handles
- callback-based signature submission for PAM authentication.
- .
- This package is installed on VM templates, not the host.
- Requires Node.js >= 22 runtime.
-EOF
-
-# Create DEBIAN/postinst
-cat > "$TEMPLATE_PKG_DIR/DEBIAN/postinst" << 'EOF'
-#!/bin/bash
-set -e
-case "$1" in
-    configure)
-        # Create pending directory (also handled by tmpfiles.d on boot)
-        mkdir -p /run/libpam-web3/pending
-        chmod 0755 /run/libpam-web3/pending
-
-        if [ -d /run/systemd/system ]; then
-            systemctl daemon-reload || true
-            systemd-tmpfiles --create libpam-web3.conf 2>/dev/null || true
-        fi
-        ;;
-esac
-exit 0
-EOF
-
-# Create DEBIAN/prerm
-cat > "$TEMPLATE_PKG_DIR/DEBIAN/prerm" << 'EOF'
-#!/bin/bash
-set -e
-case "$1" in
-    remove|upgrade|deconfigure)
-        if [ -d /run/systemd/system ]; then
-            systemctl stop web3-auth-svc 2>/dev/null || true
-            systemctl disable web3-auth-svc 2>/dev/null || true
-        fi
-        ;;
-esac
-exit 0
-EOF
-
-chmod 755 "$TEMPLATE_PKG_DIR/DEBIAN/postinst" "$TEMPLATE_PKG_DIR/DEBIAN/prerm"
-
-# Build template .deb
-dpkg-deb --build "$TEMPLATE_PKG_DIR"
-
-echo ""
-echo "=========================================="
-echo "Template package built: $SCRIPT_DIR/${TEMPLATE_PKG_NAME}.deb"
-echo "=========================================="
-echo ""
-echo "Template package contents:"
-echo "  /usr/share/blockhost/auth-svc.js                  - Auth server bundle ($AUTH_SVC_SIZE)"
-echo "  /usr/bin/web3-auth-svc                            - Auth server wrapper"
-echo "  /usr/share/blockhost/signing-page/index.html      - Signing page"
-echo "  /usr/share/blockhost/signing-page/engine.js       - CIP-30 wallet engine bundle"
-echo "  /lib/systemd/system/web3-auth-svc.service         - Systemd unit"
-echo "  /usr/lib/tmpfiles.d/libpam-web3.conf              - tmpfiles.d config"
+# Auth-svc template package (blockhost-auth-svc) removed.
+# Now maintained by the libpam-web3 Cardano plugin submodule.
+# See: cardano-auth-plugin.zip for the reference implementation.
