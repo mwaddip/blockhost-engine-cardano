@@ -684,10 +684,10 @@
             var subscriberStakeCred = addrBytes.length >= 57
                 ? addrBytes.slice(29, 57) : null;
             var validatorHash = hexToBytes(CONFIG.subscriptionValidatorHash);
-            var networkByte = CONFIG.network === 'mainnet' ? 0x31 : 0x30;
-            // Shelley script base address header: 0x30 (testnet) or 0x31 (mainnet)
-            // with script payment + key staking = type 0b0011 → header byte = (0b0011 << 4) | network_id
-            // Testnet: 0x30, Mainnet: 0x31
+            // CIP-89 address: script payment + KEY staking (subscriber's key)
+            // Address type 1 = 0b0001 → header = (1 << 4) | network_id
+            // Testnet: 0x10, Mainnet: 0x11
+            var networkByte = CONFIG.network === 'mainnet' ? 0x11 : 0x10;
             var scriptAddr;
             if (subscriberStakeCred) {
                 scriptAddr = new Uint8Array(1 + 28 + 28);
@@ -754,6 +754,17 @@
             });
 
             // C.11 Sign via CIP-30 wallet (partial = true because script inputs may be present)
+            console.log('txCborHex length:', txCborHex.length / 2, 'bytes');
+
+            // Debug: write tx hex to a file endpoint so it can be retrieved
+            try {
+                var debugEl = document.getElementById('result-content');
+                if (debugEl) {
+                    debugEl.innerHTML = '<textarea style="width:100%;height:80px;font-size:10px;background:#111;color:#0f0;border:1px solid #333" onclick="this.select()">' + txCborHex + '</textarea><p style="font-size:11px;color:#888">Copy this hex and send it for debugging</p>';
+                    document.getElementById('result-card').classList.remove('hidden');
+                }
+            } catch(e) {}
+
             showStatus('subscribe-status', '<span class="spinner"></span>Awaiting wallet signature...', 'info');
             var signedTxHex = await api.signTx(txCborHex, true);
 
@@ -1124,20 +1135,15 @@
         // Script data hash (field 11 in body) = hash of (redeemers, datums, cost_models)
 
         // Redeemer for the mint: CreateSubscription = Constr(0, [])
-        // In post-Conway format: [tag, index, data, ex_units]
+        // Conway-era redeemers: Map<[tag, index], [data, ex_units]>
         // tag 0 = spend, tag 1 = mint, tag 2 = cert, tag 3 = reward
         var redeemerData = plutusConstr(0, []);  // CreateSubscription
-        // Redeemer: [1 (mint), 0 (index in mint map), data, [mem, steps]]
-        var redeemerCbor = cborArray([
-            cborUint(1),          // tag: mint
-            cborUint(0),          // index into the mint field (first policy)
-            redeemerData,         // redeemer data
-            cborArray([           // ex_units [mem, steps]
-                cborUint(600000n),
-                cborUint(300000000n),
-            ]),
+        var redeemerKey = cborArray([cborUint(1), cborUint(0)]);  // [mint, index 0]
+        var redeemerVal = cborArray([
+            redeemerData,
+            cborArray([cborUint(600000n), cborUint(300000000n)]),  // ex_units
         ]);
-        var redeemersCbor = cborArray([redeemerCbor]);
+        var redeemersCbor = cborMap([[redeemerKey, redeemerVal]]);
 
         // Decode the beacon script from hex CBOR (it's a double-encoded CBOR script)
         var beaconScriptBytes = hexToBytes(p.beaconScriptCbor);
