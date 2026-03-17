@@ -1188,7 +1188,7 @@
 
         // Build witness set as CBOR map
         var witnessEntries = [
-            [cborUint(6), plutusV3Scripts], // field 6: plutus_v3_scripts
+            [cborUint(7), plutusV3Scripts], // field 7: plutus_v3_scripts (key 6 = v2, key 7 = v3)
             [cborUint(5), redeemersCbor],   // field 5: redeemers
         ];
         var witnessSet = cborMap(witnessEntries);
