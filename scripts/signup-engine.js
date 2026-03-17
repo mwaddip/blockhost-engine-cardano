@@ -607,10 +607,9 @@
 
             // We encrypt the full COSE_Sign1 structure (hex string) so the server
             // can verify the CIP-30 signature and extract the public key.
-            var userEncryptedHex = await eciesEncrypt(
-                CONFIG.serverPublicKey,
-                JSON.stringify({ signature: signResult.signature, key: signResult.key })
-            );
+            // For debugging: use short userEncrypted instead of full ECIES ciphertext
+            // TODO: restore full ECIES encryption after tx signing works
+            var userEncryptedHex = 'deadbeef';
 
             updateStep(3, 'done');
             showStatus('subscribe-status', '<span class="spinner"></span>Building subscription transaction...', 'info');
@@ -627,6 +626,7 @@
             var subscriberKeyHash = bytesToHex(addrBytes.slice(1, 29)); // 28-byte payment key hash
 
             // C.2  Compute beacon token name: sha256(plan_id_4bytes_BE ++ subscriber_key_hash)
+            await ensureEcies(); // ensure _sha256 is loaded
             var planIdBytes = new Uint8Array(4);
             new DataView(planIdBytes.buffer).setInt32(0, planId, false); // big-endian
             var keyHashBytes = hexToBytes(subscriberKeyHash);
@@ -767,10 +767,20 @@
 
             showStatus('subscribe-status', '<span class="spinner"></span>Awaiting wallet signature...', 'info');
             var signedTxHex = await api.signTx(txCborHex, true);
+            console.log('signedTxHex type:', typeof signedTxHex, 'length:', signedTxHex.length);
+            console.log('signedTxHex first 10:', signedTxHex.slice(0, 10));
 
-            // C.12 Submit via Koios REST API
+            // C.12 Submit — try wallet's own submitTx first (CIP-30), fall back to Koios
             showStatus('subscribe-status', '<span class="spinner"></span>Submitting transaction...', 'info');
-            var txHash = await submitViaKoios(signedTxHex);
+            var txHash;
+            try {
+                // CIP-30 submitTx — the wallet submits directly
+                txHash = await api.submitTx(signedTxHex);
+                console.log('Submitted via wallet CIP-30 submitTx');
+            } catch(walletErr) {
+                console.warn('Wallet submitTx failed, trying Koios:', walletErr);
+                txHash = await submitViaKoios(signedTxHex);
+            }
 
             console.log('Transaction submitted:', txHash);
 
