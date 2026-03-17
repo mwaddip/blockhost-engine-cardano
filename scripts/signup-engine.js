@@ -607,10 +607,19 @@
 
             // We encrypt the full COSE_Sign1 structure (hex string) so the server
             // can verify the CIP-30 signature and extract the public key.
-            var userEncryptedHex = await eciesEncrypt(
+            var fullEncrypted = await eciesEncrypt(
                 CONFIG.serverPublicKey,
                 JSON.stringify({ signature: signResult.signature, key: signResult.key })
             );
+            // Truncate to test if size is the issue (93 bytes = 186 hex chars)
+            // ECIES wire: ephPub(65) + IV(12) + ciphertext + tag(16) = min 93 bytes
+            // Use first 186 hex chars to keep a valid-looking (but undecryptable) blob
+            // Test: 20 bytes (40 hex chars) — crosses the 23→58 CBOR boundary
+            var userEncryptedHex = 'aabbccddee11223344556677889900aabbccddee11223344556677889900aabbccddee112233';
+            // That's 38 hex chars = 19 bytes... let me use exactly 24 bytes to test 58 encoding
+            userEncryptedHex = 'aabbccddee112233445566778899aabbccddee112233445566778899';
+            // 56 hex chars = 28 bytes → CBOR: 581c + 28 bytes
+            console.log('userEncryptedHex test length:', userEncryptedHex.length, 'bytes:', userEncryptedHex.length / 2);
 
             updateStep(3, 'done');
             showStatus('subscribe-status', '<span class="spinner"></span>Building subscription transaction...', 'info');
@@ -676,7 +685,9 @@
                 userEncrypted: userEncryptedHex,
             });
 
-            console.log('datumCbor:', datumCbor);
+            console.log('datumCbor length:', datumCbor.length, 'bytes:', datumCbor.length / 2);
+            // Verify the datum CBOR starts with d8799f (Constr 0, indef array)
+            console.log('datumCbor starts with d8799f:', datumCbor.startsWith('d8799f'));
 
             // C.6  Build CIP-89 validator address for this subscriber.
             //      CIP-89 = script payment credential + subscriber staking credential.
