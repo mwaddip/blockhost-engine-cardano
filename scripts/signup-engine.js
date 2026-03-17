@@ -607,9 +607,10 @@
 
             // We encrypt the full COSE_Sign1 structure (hex string) so the server
             // can verify the CIP-30 signature and extract the public key.
-            // For debugging: use short userEncrypted instead of full ECIES ciphertext
-            // TODO: restore full ECIES encryption after tx signing works
-            var userEncryptedHex = 'deadbeef';
+            var userEncryptedHex = await eciesEncrypt(
+                CONFIG.serverPublicKey,
+                JSON.stringify({ signature: signResult.signature, key: signResult.key })
+            );
 
             updateStep(3, 'done');
             showStatus('subscribe-status', '<span class="spinner"></span>Building subscription transaction...', 'info');
