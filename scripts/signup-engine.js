@@ -271,21 +271,8 @@
                 return;
             }
 
-            // If beaconPolicyId is set, filter to UTXOs carrying that token
-            if (CONFIG.beaconPolicyId) {
-                utxos = utxos.filter(function (u) {
-                    if (!u.asset_list || !Array.isArray(u.asset_list)) return false;
-                    return u.asset_list.some(function (a) {
-                        return a.policy_id === CONFIG.beaconPolicyId;
-                    });
-                });
-            }
-
-            if (utxos.length === 0) {
-                sel.innerHTML = '<option value="">No plans available</option>';
-                return;
-            }
-
+            // Plan UTXOs are identified by their datum structure (5 fields),
+            // not by beacon tokens. Try parsing each UTXO as a plan datum.
             plans = [];
             for (var i = 0; i < utxos.length; i++) {
                 var plan = parsePlanDatum(utxos[i]);
@@ -315,6 +302,76 @@
         }
     }
 
+    // ── Cost formatting ─────────────────────────────────────────────────
+
+    /**
+     * Format a token amount for display.
+     *
+     * @param {bigint} baseUnits - Amount in smallest denomination
+     * @param {number} decimals  - Decimal places (6 for ADA, 0 for most native tokens)
+     * @param {string} symbol    - Display symbol ("ADA", token name, etc.)
+     * @returns {string}
+     */
+    function formatAmount(baseUnits, decimals, symbol) {
+        if (decimals === 0) return baseUnits.toLocaleString() + ' ' + symbol;
+
+        var factor = BigInt(Math.pow(10, decimals));
+        var whole = baseUnits / factor;
+        var frac = baseUnits % factor;
+        if (frac < 0n) frac = -frac;
+
+        var fracStr = frac.toString().padStart(decimals, '0');
+        var num = Number(whole.toString() + '.' + fracStr);
+
+        // Smart decimal display:
+        //   >= 100:  no decimals (150 ADA)
+        //   1-99:   2 decimals  (5.00 ADA)
+        //   < 1:    up to 4 significant digits after last leading zero
+        var formatted;
+        if (num >= 100) {
+            formatted = Math.round(num).toLocaleString();
+        } else if (num >= 1) {
+            formatted = num.toFixed(2);
+        } else if (num > 0) {
+            // Find first non-zero decimal position, show up to 4 more digits
+            var s = num.toFixed(decimals);
+            var dotIdx = s.indexOf('.');
+            var firstNonZero = -1;
+            for (var i = dotIdx + 1; i < s.length; i++) {
+                if (s[i] !== '0') { firstNonZero = i; break; }
+            }
+            if (firstNonZero === -1) {
+                formatted = '0';
+            } else {
+                var sigDigits = Math.min(firstNonZero - dotIdx + 3, decimals);
+                formatted = num.toFixed(sigDigits);
+                // Trim trailing zeros but keep at least one after dot
+                formatted = formatted.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '.0');
+            }
+        } else {
+            formatted = '0';
+        }
+
+        return formatted + ' ' + symbol;
+    }
+
+    /**
+     * Get display info for a payment asset.
+     * Returns { decimals, symbol }.
+     */
+    function getAssetDisplayInfo(paymentAsset) {
+        // Empty policy = ADA (lovelace, 6 decimals)
+        if (!paymentAsset || paymentAsset === '' || paymentAsset === '.') {
+            return { decimals: 6, symbol: 'ADA' };
+        }
+        // For native tokens: try to decode the asset name hex as UTF-8
+        var parts = paymentAsset.split('.');
+        var assetNameHex = parts[1] || '';
+        var symbol = assetNameHex ? decodeHexString(assetNameHex) : paymentAsset.slice(0, 8) + '...';
+        // Most Cardano native tokens have 0 decimals unless we know otherwise
+        return { decimals: 0, symbol: symbol };
+    }
+
     // ── Cost calculation ──────────────────────────────────────────────────
 
     function updateCost() {
@@ -326,15 +383,9 @@
 
         if (plan && days > 0) {
             var total = plan.pricePerDay * BigInt(days);
-            // Display in lovelace if no payment asset, or raw units if token
-            var unit = plan.paymentAsset ? 'base units' : 'lovelace';
-            costEl.textContent = total.toLocaleString() + ' ' + unit;
-            if (plan.paymentAsset) {
-                detailEl.textContent = 'Asset: ' + plan.paymentAsset;
-                detailEl.classList.remove('hidden');
-            } else {
-                detailEl.classList.add('hidden');
-            }
+            var info = getAssetDisplayInfo(plan.paymentAsset);
+            costEl.textContent = formatAmount(total, info.decimals, info.symbol);
+            detailEl.classList.add('hidden');
         } else {
             costEl.textContent = '-';
             detailEl.classList.add('hidden');
@@ -421,6 +472,69 @@
         }
     }
 
+    // ── Bech32 encoding for address display ─────────────────────────────
+
+    var BECH32_CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
+
+    function bech32Polymod(values) {
+        var GEN = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3];
+        var chk = 1;
+        for (var i = 0; i < values.length; i++) {
+            var b = chk >> 25;
+            chk = ((chk & 0x1ffffff) << 5) ^ values[i];
+            for (var j = 0; j < 5; j++) {
+                if ((b >> j) & 1) chk ^= GEN[j];
+            }
+        }
+        return chk;
+    }
+
+    function bech32HrpExpand(hrp) {
+        var ret = [];
+        for (var i = 0; i < hrp.length; i++) ret.push(hrp.charCodeAt(i) >> 5);
+        ret.push(0);
+        for (var i = 0; i < hrp.length; i++) ret.push(hrp.charCodeAt(i) & 31);
+        return ret;
+    }
+
+    function bech32Encode(hrp, data5bit) {
+        var values = bech32HrpExpand(hrp).concat(data5bit).concat([0, 0, 0, 0, 0, 0]);
+        var polymod = bech32Polymod(values) ^ 1;
+        var checksum = [];
+        for (var i = 0; i < 6; i++) checksum.push((polymod >> (5 * (5 - i))) & 31);
+        var combined = data5bit.concat(checksum);
+        var result = hrp + '1';
+        for (var i = 0; i < combined.length; i++) result += BECH32_CHARSET[combined[i]];
+        return result;
+    }
+
+    function convertBits(data, fromBits, toBits, pad) {
+        var acc = 0, bits = 0, ret = [], maxv = (1 << toBits) - 1;
+        for (var i = 0; i < data.length; i++) {
+            acc = (acc << fromBits) | data[i];
+            bits += fromBits;
+            while (bits >= toBits) {
+                bits -= toBits;
+                ret.push((acc >> bits) & maxv);
+            }
+        }
+        if (pad && bits > 0) ret.push((acc << (toBits - bits)) & maxv);
+        return ret;
+    }
+
+    function hexAddressToBech32(hexAddr) {
+        try {
+            var bytes = hexToBytes(hexAddr);
+            // Header byte: top nibble = type, bottom nibble = network
+            var networkId = bytes[0] & 0x0f;
+            var hrp = networkId === 1 ? 'addr' : 'addr_test';
+            var data5 = convertBits(Array.from(bytes), 8, 5, true);
+            return bech32Encode(hrp, data5);
+        } catch (e) {
+            return hexAddr; // fallback to raw hex
+        }
+    }
+
     async function connectWallet(name) {
         try {
             api = await window.cardano[name].enable();
@@ -436,9 +550,11 @@
                 throw new Error('No address returned from wallet');
             }
 
-            var display = usedAddress.length > 24
-                ? usedAddress.slice(0, 14) + '...' + usedAddress.slice(-10)
-                : usedAddress;
+            // Convert hex address to bech32 for display
+            var bech32Addr = hexAddressToBech32(usedAddress);
+            var display = bech32Addr.length > 30
+                ? bech32Addr.slice(0, 16) + '...' + bech32Addr.slice(-10)
+                : bech32Addr;
 
             document.getElementById('wallet-not-connected').classList.add('hidden');
             document.getElementById('wallet-connected').classList.remove('hidden');
@@ -791,14 +907,23 @@
     //   Constr(6, fields)  → tag 127 + array(fields)
     //   Constr(n>=7, fields) → tag 102 + array([n, array(fields)])
 
-    /** Encode a Plutus Constr(index, fields) where fields are already CBOR-encoded */
+    /** Encode a CBOR indefinite-length array: 0x9f + items + 0xff */
+    function cborArrayIndef(items) {
+        var parts = [new Uint8Array([0x9f])];
+        for (var i = 0; i < items.length; i++) parts.push(items[i]);
+        parts.push(new Uint8Array([0xff]));
+        return concatBytes(parts);
+    }
+
+    /** Encode a Plutus Constr(index, fields) where fields are already CBOR-encoded.
+     *  Uses indefinite-length arrays as required by cardano-serialization-lib and wallets. */
     function plutusConstr(index, fieldsCbor) {
-        var arr = cborArray(fieldsCbor);
+        var arr = cborArrayIndef(fieldsCbor);
         if (index <= 6) {
             return cborTag(121 + index, arr);
         }
         // General case: tag 102 + [index, [fields]]
-        return cborTag(102, cborArray([cborUint(index), arr]));
+        return cborTag(102, cborArrayIndef([cborUint(index), arr]));
     }
 
     /**
