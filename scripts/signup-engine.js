@@ -767,49 +767,32 @@
             } catch(e) {}
 
             showStatus('subscribe-status', '<span class="spinner"></span>Awaiting wallet signature...', 'info');
-            // C.11 Sign via CIP-30 wallet
-            // CIP-30 signTx ALWAYS returns a witness set (CBOR map), not a full tx.
-            // We merge the wallet's vkey witnesses into our original tx.
+            // C.11 Sign via CIP-30 wallet (partial=true → returns witness set)
             showStatus('subscribe-status', '<span class="spinner"></span>Awaiting wallet signature...', 'info');
             var walletWitnessHex = await api.signTx(txBuildResult.txHex, true);
-            console.log('walletWitnessHex length:', walletWitnessHex.length, 'first:', walletWitnessHex.slice(0, 20));
 
-            // Merge: take our original tx body + combine witness sets
-            // Our tx: 84 [body] [our_witnesses] f5 f6
-            // Wallet witness: {0: [[vkey, sig], ...]}
-            // Merged tx: 84 [body] [merged_witnesses] f5 f6
-
-            // Extract vkey witnesses bytes from wallet witness set (key 0 value)
-            // The wallet witness starts with a1 (map of 1) 00 (key 0) then the value
+            // Merge wallet's vkey witnesses into our original tx
             var walletWitBytes = hexToBytes(walletWitnessHex);
-            // Find the vkey witnesses: skip the map header + key 0
-            // a1 00 = map(1) key(0), then the value is an array of [vkey, sig] pairs
             var vkeyWitnessesRaw;
             if (walletWitBytes[0] === 0xa1 && walletWitBytes[1] === 0x00) {
-                // Simple case: map(1) with key 0 — value starts at byte 2
-                vkeyWitnessesRaw = walletWitnessHex.slice(4); // skip 'a100'
+                vkeyWitnessesRaw = walletWitnessHex.slice(4);
             } else {
-                // Complex case: use the full wallet witness as-is
-                console.warn('Unexpected wallet witness format, first bytes:', walletWitnessHex.slice(0, 10));
                 vkeyWitnessesRaw = walletWitnessHex;
             }
 
-            // Build merged witness set: {0: vkeys, 5: redeemers, 7: scripts}
             var mergedWitness = cborMap([
                 [cborUint(0), hexToBytes(vkeyWitnessesRaw)],
                 [cborUint(5), txBuildResult.redeemersCbor],
                 [cborUint(7), txBuildResult.plutusV3Scripts],
             ]);
 
-            // Reconstruct full tx: [body, mergedWitness, true, null]
             var signedTx = cborArray([
                 txBuildResult.txBody,
                 mergedWitness,
-                new Uint8Array([0xf5]),  // CBOR true
-                new Uint8Array([0xf6]),  // CBOR null
+                new Uint8Array([0xf5]),
+                new Uint8Array([0xf6]),
             ]);
             var signedTxHex = bytesToHex(signedTx);
-            console.log('Merged signed tx length:', signedTxHex.length / 2, 'first:', signedTxHex.slice(0, 10));
 
             // C.12 Submit via Koios
             showStatus('subscribe-status', '<span class="spinner"></span>Submitting transaction...', 'info');
@@ -970,14 +953,17 @@
     }
 
     /** Encode a Plutus Constr(index, fields) where fields are already CBOR-encoded.
-     *  Uses indefinite-length arrays as required by cardano-serialization-lib and wallets. */
+     *  Uses indefinite-length arrays for non-empty fields (wallet compat),
+     *  definite empty array for empty fields (Lucid/CSL compat). */
     function plutusConstr(index, fieldsCbor) {
-        var arr = cborArrayIndef(fieldsCbor);
+        // Empty fields: use definite empty array 0x80 (matches Lucid's encoding)
+        // Non-empty fields: use indefinite array 0x9f...0xff (matches Lucid's encoding)
+        var arr = fieldsCbor.length === 0 ? cborArray([]) : cborArrayIndef(fieldsCbor);
         if (index <= 6) {
             return cborTag(121 + index, arr);
         }
         // General case: tag 102 + [index, [fields]]
-        return cborTag(102, cborArrayIndef([cborUint(index), arr]));
+        return cborTag(102, cborArray([cborUint(index), arr]));
     }
 
     /**
@@ -1163,9 +1149,17 @@
         if (!collateralUtxos || collateralUtxos.length === 0) {
             throw new Error('No collateral set in wallet. Please configure collateral in your wallet settings (typically 5 ADA).');
         }
+        console.log('getCollateral returned', collateralUtxos.length, 'UTXOs');
+        console.log('Collateral[0] hex length:', collateralUtxos[0].length, 'first 80:', collateralUtxos[0].slice(0, 80));
         var collateralParsed = parseCip30Utxo(collateralUtxos[0]);
         if (!collateralParsed) throw new Error('Could not parse collateral UTXO');
-        console.log('Collateral UTXO:', collateralParsed.txHash.slice(0, 16) + '#' + collateralParsed.index, 'lovelace:', collateralParsed.lovelace.toString());
+        console.log('Collateral parsed txHash:', collateralParsed.txHash, '(len:', collateralParsed.txHash.length + ') #' + collateralParsed.index, 'lovelace:', collateralParsed.lovelace.toString());
+
+        // Verify collateral txHash is 64 hex chars (32 bytes)
+        if (collateralParsed.txHash.length !== 64) {
+            console.error('COLLATERAL TXHASH WRONG LENGTH:', collateralParsed.txHash.length, 'expected 64');
+        }
+        console.log('Spending inputs:', selectedUtxos.map(function(u) { return u.txHash + '#' + u.index + '(len:' + u.txHash.length + ')'; }));
         // Verify collateral is not in spending inputs
         var colKey = collateralParsed.txHash + '#' + collateralParsed.index;
         var spendKeys = selectedUtxos.map(function(u) { return u.txHash + '#' + u.index; });
@@ -1177,13 +1171,18 @@
         var collateralInputsCbor = cborTag(258, cborArray([
             cborArray([cborBytes(collateralParsed.txHash), cborUint(collateralParsed.index)]),
         ]));
-        // key 16 = collateral return
+        // key 17 = total collateral = how much the node can seize if script fails
+        // Must equal: collateral_input_value - collateral_return_value
+        // Typical: 150% of fee. With 1 ADA fee → 1.5 ADA collateral.
+        var totalCollateral = estimatedFee + estimatedFee / 2n; // 150% of fee
+        if (totalCollateral > collateralParsed.lovelace) totalCollateral = collateralParsed.lovelace;
+
+        // key 16 = collateral return (remainder back to subscriber)
+        var collateralReturnValue = collateralParsed.lovelace - totalCollateral;
         var collateralReturnCbor = cborMap([
             [cborUint(0), cborBytes(hexToBytes(p.changeAddrHex))],
-            [cborUint(1), cborUint(collateralParsed.lovelace)],
+            [cborUint(1), cborUint(collateralReturnValue)],
         ]);
-        // key 17 = total collateral (5 ADA)
-        var totalCollateral = 5_000_000n;
 
         var bodyEntries = [
             [cborUint(0), inputsCbor],      // inputs
