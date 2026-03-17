@@ -901,15 +901,21 @@
         return cborNint(n);
     }
 
-    /** Encode a CBOR byte string (major 2).
-     *  For bytestrings > 64 bytes, uses indefinite-length chunking (5f + 64-byte chunks + ff)
-     *  to match cardano-serialization-lib / Lucid encoding convention. */
+    /** Encode a CBOR byte string (major 2) — always definite-length. */
     function cborBytes(bytes) {
+        if (typeof bytes === 'string') bytes = hexToBytes(bytes);
+        return concatBytes([cborHeader(2, bytes.length), bytes]);
+    }
+
+    /** Encode a CBOR byte string with chunking for Plutus Data.
+     *  For bytestrings > 64 bytes, uses indefinite-length chunking (5f + 64-byte chunks + ff)
+     *  to match cardano-serialization-lib / Lucid encoding convention.
+     *  ONLY use inside Plutus Data (datums/redeemers), NOT for tx body fields. */
+    function cborBytesChunked(bytes) {
         if (typeof bytes === 'string') bytes = hexToBytes(bytes);
         if (bytes.length <= 64) {
             return concatBytes([cborHeader(2, bytes.length), bytes]);
         }
-        // Indefinite-length bytestring: 0x5f + chunks of up to 64 bytes + 0xff
         var parts = [new Uint8Array([0x5f])];
         var offset = 0;
         while (offset < bytes.length) {
@@ -1010,21 +1016,21 @@
      */
     function encodePlutusSubscriptionDatum(d) {
         var paymentAsset = plutusConstr(0, [
-            cborBytes(d.payPolicyId),
-            cborBytes(d.payAssetName),
+            cborBytesChunked(d.payPolicyId),
+            cborBytesChunked(d.payAssetName),
         ]);
 
         var fields = [
             cborInt(d.planId),
             cborInt(d.expiry),
-            cborBytes(d.subscriberKeyHash),
+            cborBytesChunked(d.subscriberKeyHash),
             cborInt(d.amountRemaining),
             cborInt(d.ratePerInterval),
             cborInt(d.intervalMs),
             cborInt(d.lastCollected),
             paymentAsset,
-            cborBytes(d.beaconPolicyId),
-            cborBytes(d.userEncrypted),
+            cborBytesChunked(d.beaconPolicyId),
+            cborBytesChunked(d.userEncrypted),
         ];
 
         var cbor = plutusConstr(0, fields);
