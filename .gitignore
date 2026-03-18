@@ -5,9 +5,21 @@ build/
 *.d.ts
 *.js.map
 !engine.json
-!auth-svc/signing-page/engine.js
 !scripts/signup-engine.js
 .env
 *.key
 *.secret
 target/
+
+# Build artifacts
+*.deb
+packaging/*.deb
+plutus.json
+aiken.lock
+package-lock.json
+
+# Tool artifacts
+.agents/
+.claude/
+skills-lock.json
+docs/superpowers/
