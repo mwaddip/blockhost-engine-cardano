@@ -62,12 +62,7 @@ Three Plutus V3 validators, parameterized at deploy time:
 
 ## Authentication
 
-Authentication is handled by the **libpam-web3 Cardano plugin** (separate repo), not this engine. The engine defines:
-- The `.sig` file format (`{ chain: "cardano", signature, public_key, otp, machine_id }`)
-- The GECOS format (`wallet=<bech32_addr>,nft=<token_id>`)
-- The CIP-30 signData flow for credential derivation
-
-See [docs/auth-plugin-interface.md](docs/auth-plugin-interface.md) for the full specification.
+Authentication is handled by **libpam-web3** and its chain-specific plugins (separate repos). The engine's only role in auth is storing `userEncrypted` in the subscription datum and minting the CIP-68 NFT credential to the subscriber.
 
 ## Prerequisites
 
@@ -147,8 +142,6 @@ blockhost-engine-cardano/
 | Document | Contents |
 |----------|----------|
 | [docs/validators.md](docs/validators.md) | Aiken validators: datum, redeemers, spending paths |
-| [docs/auth-plugin-interface.md](docs/auth-plugin-interface.md) | Auth plugin spec: .sig format, verification steps, GECOS |
-| [docs/vm-authentication.md](docs/vm-authentication.md) | Auth flow overview, GECOS format, reconciliation |
 | [docs/reconciler.md](docs/reconciler.md) | NFT ownership reconciliation, GECOS sync |
 | [docs/configuration.md](docs/configuration.md) | Config files, addressbook, revenue sharing |
 | [docs/fund-manager.md](docs/fund-manager.md) | Batch collection, distribution, hot wallet |
