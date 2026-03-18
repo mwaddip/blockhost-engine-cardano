@@ -1,70 +1,83 @@
 # Blockhost Engine (Cardano)
 
-Blockchain-based VM hosting subscription system on Cardano. Users lock funds at a validator address, which triggers automatic VM provisioning with NFT-based SSH authentication.
+UTXO-native VM hosting subscription system on Cardano. Subscribers lock funds at a validator address with beacon tokens for discoverability. No shared contract state, no custody transfer — subscribers retain control of their funds until the service collects earned payment at configurable intervals.
 
 ## How It Works
 
-1. **User visits signup page** — Connects CIP-30 wallet (Eternl, Nami, etc.), signs challenge, locks subscription funds at validator address
-2. **Subscription UTXO is created** — Beacon token minted under beacon policy, inline datum carries encrypted user data
-3. **Monitor service detects beacon** — Scans Blockfrost for new beacon tokens at the validator address, triggers VM provisioning
+1. **User visits signup page** — Connects CIP-30 wallet (Eternl, Nami, etc.), selects plan, pays
+2. **Subscription UTXO created** — Funds locked at per-subscriber script address with beacon token + inline datum
+3. **Monitor detects beacon** — Scans for new beacon tokens via Koios, triggers VM provisioning
 4. **VM is created** — With web3-only SSH authentication (no passwords, no keys)
-5. **NFT is minted** — CIP-68 user token (for the subscriber) + reference token (holds encrypted datum)
-6. **User authenticates** — Signs with CIP-30 wallet on VM's signing page, gets SSH access
+5. **NFT is minted** — CIP-68 credential with encrypted connection details in reference datum
+6. **User authenticates** — Signs with Cardano wallet on VM's signing page, PAM plugin verifies
 
 ## Architecture
 
 ```
 ┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│   Signup Page   │────>│  Validator Addr  │────>│  Monitor Svc    │
-│   (static HTML) │     │  (Cardano L1)    │     │  (TypeScript)   │
+│   Signup Page   │────>│  Subscription    │────>│  Monitor Svc    │
+│   (static HTML) │     │  Validator (Aiken)│     │  (TypeScript)   │
 └─────────────────┘     └──────────────────┘     └────────┬────────┘
-         │                       │                         │
-         │               Beacon tokens                     v
-         │               (CIP-89 disc.)          ┌─────────────────┐
-         │                                        │  Provisioner    │
-         v                                        │  (pluggable)    │
-┌─────────────────┐     ┌──────────────────┐     └────────┬────────┘
-│   User's VM     │<────│  CIP-68 NFT      │<────│  Engine         │
-│   (web3 auth)   │     │  (user+ref token)│     │  (manifest)     │
+                                                          │
+                                                          v
+┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│   User's VM     │<────│  Provisioner     │<────│  Engine         │
+│   (PAM plugin)  │     │  (pluggable)     │     │  (manifest)     │
 └─────────────────┘     └──────────────────┘     └─────────────────┘
-                                 │
-                          Blockfrost API
-                          (chain queries)
 ```
 
-Subscriptions are UTXO-native: each subscriber's funds are locked at the validator address with an inline datum. There is no shared contract state. The beacon token makes UTXOs discoverable without enumeration. The engine reads on-chain state via Blockfrost — no custom node required.
+Key differences from EVM/OPNet engines:
+- **Per-subscriber UTXOs** at CIP-89 addresses (script payment + subscriber staking)
+- **Beacon tokens** instead of contract events for subscription discovery
+- **Interval-based collection** — service claims earned payment periodically, not all at once
+- **Fair cancellation** — validator enforces earned/refund split
+- **Koios** as default chain provider (free, no API key)
 
 ## Components
 
 | Component | Language | Description |
 |-----------|----------|-------------|
-| `validators/` | Aiken | Subscription, beacon, and NFT minting policies (compiled to Plutus) |
-| `src/monitor/` | TypeScript | Beacon UTXO scanner via Blockfrost |
-| `src/handlers/` | TypeScript | Scan diff handlers (VM provisioning, NFT minting) |
-| `src/admin/` | TypeScript | Transaction metadata admin commands (HMAC-authenticated) |
-| `src/reconcile/` | TypeScript | Hourly NFT ownership reconciliation |
-| `src/fund-manager/` | TypeScript | Batch UTXO collection and revenue distribution |
-| `src/bw/` | TypeScript | blockwallet CLI for scriptable wallet operations |
-| `src/ab/` | TypeScript | Addressbook CLI for managing wallet entries |
-| `src/is/` | TypeScript | Identity predicate CLI (NFT ownership, address checks) |
-| `src/auth-svc/` | TypeScript | CIP-30 auth signing server (esbuild-bundled for VMs) |
-| `src/root-agent/` | TypeScript | Client for the privileged root agent daemon |
+| `validators/` | Aiken | Subscription, beacon, and NFT minting policies |
+| `src/monitor/` | TypeScript | Beacon UTXO scanner |
+| `src/handlers/` | TypeScript | Subscription lifecycle handlers (provision, extend, cancel) |
+| `src/admin/` | TypeScript | On-chain admin commands via transaction metadata |
+| `src/reconcile/` | TypeScript | NFT ownership reconciliation and GECOS sync |
+| `src/fund-manager/` | TypeScript | Batch subscription collection and revenue distribution |
+| `src/bw/` | TypeScript | blockwallet CLI (send, balance, withdraw, plan, who, set) |
+| `src/ab/` | TypeScript | Addressbook CLI |
+| `src/is/` | TypeScript | Identity predicate CLI |
+| `src/bhcrypt.ts` | TypeScript | Crypto tool (keypair gen, ECIES, symmetric, Cardano keygen) |
+| `src/cardano/` | TypeScript | Cardano utilities (provider, wallet, beacon, address, types) |
+| `src/root-agent/` | TypeScript | Root agent client (privilege separation) |
 | `blockhost/engine_cardano/` | Python | Installer wizard plugin |
-| `auth-svc/signing-page/` | HTML/JS | Signing page template + engine bundle |
-| `scripts/` | TS/JS/Python | Deployment, signup page, keygen |
+| `scripts/` | TS/Bash/Python | Deployment, minting, signup page generation |
+
+## On-chain Components (Aiken Validators)
+
+Three Plutus V3 validators, parameterized at deploy time:
+
+- **Subscription validator** — Spending script with 4 redeemers: `ServiceCollect` (interval-based partial collection), `SubscriberCancel` (fair split), `SubscriberExtend` (top up), `Migrate` (upgrade path)
+- **Beacon minting policy** — Mints discoverable beacon tokens alongside subscriptions, burns on collection/cancellation
+- **NFT minting policy** — CIP-68 access credentials (user token + reference token with encrypted datum)
+
+## Authentication
+
+Authentication is handled by the **libpam-web3 Cardano plugin** (separate repo), not this engine. The engine defines:
+- The `.sig` file format (`{ chain: "cardano", signature, public_key, otp, machine_id }`)
+- The GECOS format (`wallet=<bech32_addr>,nft=<token_id>`)
+- The CIP-30 signData flow for credential derivation
+
+See [docs/auth-plugin-interface.md](docs/auth-plugin-interface.md) for the full specification.
 
 ## Prerequisites
 
 - Node.js 22+
 - Python 3.10+
-- [Aiken](https://aiken-lang.org/) — Cardano smart contract compiler (`aiken build`, `aiken check`)
-- `blockhost-common` package (shared configuration)
-- A Blockfrost account and project ID (`preprod` or `mainnet`)
-- A provisioner package (e.g. `blockhost-provisioner-proxmox`) with a manifest
+- Aiken v1.1.21+ (for validator development)
+- `blockhost-common` package
+- A provisioner package (e.g. `blockhost-provisioner-proxmox`)
 
 ## Development Setup
-
-This is a component of the BlockHost system — it's installed via `packaging/build.sh` as part of a full deployment. For local development:
 
 ```bash
 git clone https://github.com/mwaddip/blockhost-engine-cardano.git
@@ -73,18 +86,13 @@ npm install
 ```
 
 ```bash
-npx tsc --noEmit          # Type-check TypeScript
-npm run monitor            # Run beacon monitor (needs config on a deployed host)
+npx tsc --noEmit                    # Type-check TypeScript
+export PATH="$HOME/.aiken/bin:$PATH"
+aiken build                         # Build validators -> plutus.json
+aiken check                         # Run validator tests
 ```
 
-Aiken validator compilation:
-
-```bash
-aiken build                # Compile validators to Plutus blueprints
-aiken check                # Run Aiken tests
-```
-
-Packaging (produces `.deb` for host + auth-svc template):
+Packaging (produces `.deb` for host):
 
 ```bash
 ./packaging/build.sh
@@ -94,60 +102,60 @@ Packaging (produces `.deb` for host + auth-svc template):
 
 ```
 blockhost-engine-cardano/
-├── validators/                         # Aiken validators (Plutus)
-│   ├── subscription.ak                 # Subscription spending validator
-│   ├── beacon.ak                       # Beacon minting policy (CIP-89)
-│   └── nft.ak                          # NFT minting policy (CIP-68)
-├── lib/blockhost/                      # Aiken shared library
-│   ├── types.ak                        # Datum and redeemer types
-│   └── utils.ak                        # Validator utilities
-├── scripts/                            # Deployment & utility scripts
-│   ├── deploy-contracts                # Validator deployer (aiken blueprint apply)
-│   ├── mint_nft                        # NFT minter (blockhost-mint-nft)
-│   ├── generate-signup-page            # Signup page generator (Python)
-│   ├── signup-template.html            # Signup page template (replaceable HTML/CSS)
-│   ├── signup-engine.js                # Signup page engine bundle (CIP-30 wallet logic)
-│   └── keygen.ts                       # BIP39 / CIP-1852 wallet generator
-├── blockhost/engine_cardano/           # Installer wizard plugin
-│   ├── wizard.py                       # Blueprint, API routes, finalization steps
-│   └── templates/engine_cardano/       # Wizard page templates
-├── engine.json                         # Engine manifest
-├── src/                                # TypeScript source
-│   ├── monitor/                        # Beacon UTXO scanner
-│   ├── handlers/                       # Scan diff event handlers
-│   ├── admin/                          # Transaction metadata admin commands
-│   ├── reconcile/                      # NFT ownership reconciliation
-│   ├── fund-manager/                   # Batch collection & distribution
-│   ├── cardano/                        # Cardano helpers (Blockfrost, wallet, beacon)
-│   ├── nft/                            # NFT mint and CIP-68 reference queries
-│   ├── crypto.ts                       # ECIES + SHAKE256
-│   ├── bhcrypt.ts                      # bhcrypt CLI
-│   ├── bw/                             # blockwallet CLI
-│   ├── ab/                             # addressbook CLI
-│   ├── is/                             # identity predicate CLI
-│   ├── auth-svc/                       # CIP-30 auth signing server
-│   └── root-agent/                     # Root agent client
-├── auth-svc/                           # Auth service assets
-│   └── signing-page/                   # template.html + engine.js → index.html
-├── aiken.toml                          # Aiken project config
-├── plutus.json                         # Compiled Plutus blueprints (generated)
-├── docs/                               # Detailed documentation
-└── examples/                           # Deployment examples
+├── validators/                     # Aiken validators (Plutus V3)
+│   ├── subscription.ak             # Subscription spending validator
+│   ├── beacon.ak                   # Beacon minting/staking policy
+│   └── nft.ak                      # NFT minting policy (CIP-68)
+├── lib/blockhost/                  # Shared Aiken library code
+│   ├── types.ak                    # Datum/redeemer type definitions
+│   └── utils.ak                    # Validation helpers
+├── src/                            # TypeScript source
+│   ├── monitor/                    # Beacon UTXO scanner
+│   ├── handlers/                   # Subscription lifecycle handlers
+│   ├── admin/                      # On-chain admin commands
+│   ├── reconcile/                  # NFT ownership reconciliation
+│   ├── fund-manager/               # Batch collection & distribution
+│   ├── cardano/                    # Cardano utilities (provider, wallet, types)
+│   ├── bw/                         # blockwallet CLI
+│   ├── ab/                         # addressbook CLI
+│   ├── is/                         # identity predicate CLI
+│   ├── crypto.ts                   # ECIES + SHAKE256 symmetric
+│   ├── bhcrypt.ts                  # Crypto tool CLI
+│   ├── provisioner.ts              # Provisioner manifest reader
+│   └── root-agent/                 # Root agent client
+├── scripts/                        # Deployment & utility scripts
+│   ├── deploy-contracts            # Validator deployment
+│   ├── mint_nft.ts                 # CIP-68 NFT minting
+│   ├── keygen.ts                   # Cardano wallet generation
+│   ├── generate-signup-page        # Signup page renderer
+│   ├── signup-template.html        # Signup page HTML template
+│   └── signup-engine.js            # Browser-side subscription tx builder
+├── blockhost/engine_cardano/       # Installer wizard plugin
+│   ├── wizard.py                   # Flask blueprint + finalization steps
+│   └── templates/engine_cardano/   # Wizard page templates
+├── engine.json                     # Engine manifest
+├── aiken.toml                      # Aiken project config
+├── plutus.json                     # Compiled validator blueprint
+├── packaging/                      # .deb build script
+├── root-agent-actions/             # Root agent wallet plugin
+├── examples/                       # Systemd units
+└── docs/                           # Documentation
 ```
 
 ## Documentation
 
 | Document | Contents |
 |----------|----------|
-| [docs/validators.md](docs/validators.md) | Aiken validators, datum structure, redeemers, beacon name computation |
-| [docs/vm-authentication.md](docs/vm-authentication.md) | CIP-30 auth flow, auth-svc, .sig format, template package |
-| [docs/reconciler.md](docs/reconciler.md) | Hourly ownership scan, CIP-68 token holder lookup, GECOS sync |
+| [docs/validators.md](docs/validators.md) | Aiken validators: datum, redeemers, spending paths |
+| [docs/auth-plugin-interface.md](docs/auth-plugin-interface.md) | Auth plugin spec: .sig format, verification steps, GECOS |
+| [docs/vm-authentication.md](docs/vm-authentication.md) | Auth flow overview, GECOS format, reconciliation |
+| [docs/reconciler.md](docs/reconciler.md) | NFT ownership reconciliation, GECOS sync |
 | [docs/configuration.md](docs/configuration.md) | Config files, addressbook, revenue sharing |
-| [docs/fund-manager.md](docs/fund-manager.md) | Batch UTXO collection, lovelace distribution, hot wallet |
-| [docs/cli.md](docs/cli.md) | bw, ab, is, bhcrypt — all CLIs |
-| [docs/engine-manifest.md](docs/engine-manifest.md) | engine.json schema, Cardano constraints |
-| [docs/privilege-separation.md](docs/privilege-separation.md) | Root agent protocol, Cardano wallet generation |
-| [docs/templating.md](docs/templating.md) | Signup page template, Cardano-specific placeholders |
+| [docs/fund-manager.md](docs/fund-manager.md) | Batch collection, distribution, hot wallet |
+| [docs/cli.md](docs/cli.md) | bw, ab, is, bhcrypt — all CLI tools |
+| [docs/engine-manifest.md](docs/engine-manifest.md) | engine.json schema, constraints |
+| [docs/privilege-separation.md](docs/privilege-separation.md) | Root agent protocol |
+| [docs/templating.md](docs/templating.md) | Signup page templates, placeholders |
 
 ## License
 
@@ -158,4 +166,4 @@ MIT
 - `blockhost-common` — Shared configuration and Python modules
 - `blockhost-provisioner-proxmox` — VM provisioning (Proxmox)
 - `blockhost-provisioner-libvirt` — VM provisioning (libvirt/KVM)
-- `libpam-web3` — PAM module for web3 authentication (installed on VMs)
+- `libpam-web3` — PAM module + chain-specific auth plugins (installed on VMs)
