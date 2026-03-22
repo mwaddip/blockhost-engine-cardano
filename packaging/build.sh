@@ -196,6 +196,21 @@ else
 fi
 
 # ============================================
+# Copy WASM blobs required at runtime
+# ============================================
+echo ""
+echo "Copying WASM dependencies..."
+
+WASM_SRC="$PROJECT_DIR/node_modules/@anastasia-labs/cardano-multiplatform-lib-nodejs/cardano_multiplatform_lib_bg.wasm"
+if [ -f "$WASM_SRC" ]; then
+    cp "$WASM_SRC" "$PKG_DIR/usr/share/blockhost/"
+    echo "  Copied: cardano_multiplatform_lib_bg.wasm ($(du -h "$WASM_SRC" | cut -f1))"
+else
+    echo "  WARNING: WASM blob not found: $WASM_SRC"
+    echo "           Bundles using Lucid/MeshJS will fail at runtime."
+fi
+
+# ============================================
 # Copy Aiken contract artifacts (plutus.json)
 # ============================================
 echo ""
@@ -365,6 +380,7 @@ echo "  /usr/share/blockhost/is.js         - Bundled is CLI ($IS_SIZE)"
 echo "  /usr/share/blockhost/bhcrypt.js    - Bundled bhcrypt CLI ($BHCRYPT_SIZE)"
 echo "  /usr/share/blockhost/mint_nft.js   - Bundled mint_nft CLI"
 echo "  /usr/share/blockhost/keygen.js     - Bundled keygen helper (ESM)"
+echo "  /usr/share/blockhost/cardano_multiplatform_lib_bg.wasm - CML WASM runtime"
 echo "  /usr/bin/bw                        - Blockwallet CLI wrapper"
 echo "  /usr/bin/ab                        - Addressbook CLI wrapper"
 echo "  /usr/bin/is                        - Identity predicate CLI wrapper"

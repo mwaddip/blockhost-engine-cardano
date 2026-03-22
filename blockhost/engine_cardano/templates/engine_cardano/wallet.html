@@ -31,7 +31,7 @@
         </p>
         <div class="form-group">
             <label for="public-secret-input">Public Secret</label>
-            <input type="text" id="public-secret-input" value="{{ public_secret }}" style="font-family: monospace;">
+            <input type="text" id="public-secret-input" value="{{ public_secret | default('blockhost-access') }}" style="font-family: monospace;">
             <p class="text-muted mt-1" style="font-size: 0.75rem;">
                 This is the shared secret configured for your BlockHost instance.
             </p>

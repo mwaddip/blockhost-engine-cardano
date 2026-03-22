@@ -94,7 +94,12 @@ def wizard_cardano():
     """Cardano blockchain configuration step."""
     if request.method == "POST":
         network = request.form.get("network", "preprod").strip()
-        blockfrost_project_id = request.form.get("blockfrost_project_id", "").strip()
+        blockfrost_raw = request.form.get("blockfrost_project_id", "").strip()
+        # Auto-prepend network prefix if user entered bare 32-char ID
+        if blockfrost_raw and not BLOCKFROST_PROJECT_ID_RE.match(blockfrost_raw):
+            blockfrost_project_id = network + blockfrost_raw
+        else:
+            blockfrost_project_id = blockfrost_raw
         admin_wallet = request.form.get("admin_wallet", "").strip()
         wallet_mode = request.form.get("wallet_mode", "generate")
         deployer_mnemonic = request.form.get("deployer_mnemonic", "").strip()

@@ -39,15 +39,22 @@
                 Optionally, you can provide a <a href="https://blockfrost.io" target="_blank" rel="noopener">Blockfrost</a>
                 project ID to use Blockfrost instead (useful for higher rate limits).
             </p>
+            {% set bf_full = blockchain.get('blockfrost_project_id', '') %}
+            {% set bf_net = blockchain.get('network', 'preprod') %}
+            {% set bf_bare = bf_full[bf_net|length:] if bf_full.startswith(bf_net) else bf_full %}
             <div class="form-group">
                 <label for="blockfrost_project_id">Blockfrost Project ID <span class="text-muted" style="font-size: 0.75rem;">(optional)</span></label>
-                <input type="text" id="blockfrost_project_id" name="blockfrost_project_id"
-                       value="{{ blockchain.get('blockfrost_project_id', '') }}"
-                       placeholder="Leave blank to use Koios (free, no API key required)"
-                       style="font-family: monospace;">
+                <div style="display: flex; align-items: center; gap: 0;">
+                    <span id="blockfrost-prefix" style="font-family: monospace; padding: 0.5rem 0.4rem; background: var(--bg-secondary); border: 1px solid var(--border); border-right: none; border-radius: 4px 0 0 4px; white-space: nowrap; font-size: 0.875rem; color: var(--text-muted);">{{ bf_net }}</span>
+                    <input type="text" id="blockfrost_project_id" name="blockfrost_project_id"
+                           value="{{ bf_bare }}"
+                           placeholder="Leave blank to use Koios (free, no API key)"
+                           maxlength="32"
+                           style="font-family: monospace; border-radius: 0 4px 4px 0;">
+                </div>
                 <p class="text-muted mt-1" style="font-size: 0.75rem;">
-                    If provided, format must be: <code>preprod&lt;32 chars&gt;</code>, <code>preview&lt;32 chars&gt;</code>, or <code>mainnet&lt;32 chars&gt;</code>,
-                    matching the selected network above.
+                    Paste the 32-character project ID from <a href="https://blockfrost.io" target="_blank" rel="noopener">blockfrost.io</a>.
+                    The network prefix is added automatically.
                 </p>
             </div>
         </div>
@@ -282,6 +289,27 @@
 
 {% block extra_js %}
 <script>
+// Sync Blockfrost prefix with network dropdown
+var networkSelect = document.getElementById('network');
+var blockfrostPrefix = document.getElementById('blockfrost-prefix');
+var blockfrostInput = document.getElementById('blockfrost_project_id');
+
+networkSelect.addEventListener('change', function() {
+    blockfrostPrefix.textContent = this.value;
+});
+
+// Strip network prefix if user pastes a full project ID
+blockfrostInput.addEventListener('input', function() {
+    var v = this.value.trim();
+    var prefixes = ['mainnet', 'preprod', 'preview'];
+    for (var i = 0; i < prefixes.length; i++) {
+        if (v.indexOf(prefixes[i]) === 0) {
+            this.value = v.slice(prefixes[i].length);
+            return;
+        }
+    }
+});
+
 // Toggle revenue sharing details
 function toggleRevenueShare() {
     var enabled = document.getElementById('revenue_share_enabled').checked;

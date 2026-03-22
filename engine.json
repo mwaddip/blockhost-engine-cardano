@@ -2,7 +2,7 @@
   "name": "cardano",
   "version": "0.1.0",
   "display_name": "Cardano",
-  "accent_color": "#0033AD",
+  "accent_color": "#2E6AE6",
   "setup": {
     "first_boot_hook": "/usr/share/blockhost/engine-hooks/first-boot.sh",
     "wizard_module": "blockhost.engine_cardano.wizard",
