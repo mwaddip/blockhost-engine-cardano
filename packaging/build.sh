@@ -222,7 +222,8 @@ Section: admin
 Priority: optional
 Architecture: all
 Depends: blockhost-common (>= 0.1.0), nodejs (>= 22), python3 (>= 3.10)
-Provides: bhcrypt
+Provides: bhcrypt, blockhost-engine
+Conflicts: blockhost-engine
 Recommends: blockhost-provisioner-proxmox (>= 0.1.0) | blockhost-provisioner-libvirt (>= 0.1.0)
 Maintainer: Blockhost <admin@blockhost.io>
 Description: Cardano engine for Blockhost VM hosting

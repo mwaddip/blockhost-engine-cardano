@@ -73,6 +73,10 @@ def validate_cardano_address(address: str) -> bool:
     return bool(CARDANO_ADDRESS_RE.match(address.strip()))
 
 
+# Alias for installer discovery (app.py calls getattr(module, 'validate_address'))
+validate_address = validate_cardano_address
+
+
 def validate_blockfrost_project_id(project_id: str) -> bool:
     """Validate a Blockfrost project ID format."""
     if not project_id or not isinstance(project_id, str):

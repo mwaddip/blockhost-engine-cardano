@@ -17,6 +17,7 @@
     "native_token": "ada",
     "native_token_label": "ADA",
     "token_pattern": "^[0-9a-fA-F]{56}(\\.[0-9a-fA-F]+)?$",
-    "address_placeholder": "addr1..."
+    "address_placeholder": "addr1...",
+    "signature_pattern": "^[0-9a-fA-F]{2,}$"
   }
 }
