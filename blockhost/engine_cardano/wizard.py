@@ -276,6 +276,11 @@ def get_summary_data(session_data: dict) -> dict:
     }
 
 
+def get_wallet_template() -> str:
+    """Return the template name for the engine wallet connection page."""
+    return "engine_cardano/wallet.html"
+
+
 def get_summary_template() -> str:
     """Return the template name for the engine summary section."""
     return "engine_cardano/summary_section.html"

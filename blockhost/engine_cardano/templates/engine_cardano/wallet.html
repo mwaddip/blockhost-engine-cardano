@@ -1,0 +1,357 @@
+{% extends "base.html" %}
+{% from "macros/wizard_steps.html" import step_bar %}
+
+{% block title %}Admin Wallet - BlockHost Installer{% endblock %}
+
+{% block content %}
+{{ step_bar('wallet') }}
+
+<div class="card">
+    <h2>Admin Wallet</h2>
+    <p class="text-muted mb-2">Connect your Cardano wallet to prove ownership. This wallet becomes the admin identity for your BlockHost instance.</p>
+
+    <!-- Section 1: Connect -->
+    <div id="section-connect" class="form-section">
+        <h3>1. Connect Wallet</h3>
+        <div id="wallet-list" style="display: flex; flex-wrap: wrap; gap: 0.5rem;"></div>
+        <div id="no-wallets" class="hidden">
+            <div class="alert alert-warning">
+                No CIP-30 compatible Cardano wallet detected. Please install a browser wallet extension
+                (Eternl, Nami, Lace, Flint, or Typhon) and refresh this page.
+            </div>
+        </div>
+        <div id="connect-status" class="hidden" style="margin-top: 0.5rem;"></div>
+    </div>
+
+    <!-- Section 2: Sign -->
+    <div id="section-sign" class="form-section hidden">
+        <h3>2. Sign Message</h3>
+        <p class="text-muted mb-2" style="font-size: 0.875rem;">
+            Sign the public secret to prove wallet ownership. This signature is used to authenticate admin operations.
+        </p>
+        <div class="form-group">
+            <label for="public-secret-input">Public Secret</label>
+            <input type="text" id="public-secret-input" value="{{ public_secret }}" style="font-family: monospace;">
+            <p class="text-muted mt-1" style="font-size: 0.75rem;">
+                This is the shared secret configured for your BlockHost instance.
+            </p>
+        </div>
+        <button type="button" class="btn btn-primary" id="sign-btn" onclick="signMessage()">
+            Sign with Wallet
+        </button>
+        <div id="sign-status" class="hidden" style="margin-top: 0.5rem;"></div>
+    </div>
+
+    <!-- Section 3: Confirmed -->
+    <div id="section-confirmed" class="form-section hidden">
+        <h3>3. Wallet Confirmed</h3>
+        <div style="padding: 1rem; background: var(--bg-secondary); border-radius: 4px;">
+            <div class="summary-item">
+                <span class="summary-label">Wallet</span>
+                <span id="confirmed-wallet-name" class="summary-value"></span>
+            </div>
+            <div class="summary-item">
+                <span class="summary-label">Address</span>
+                <span id="confirmed-address" class="summary-value" style="font-size: 0.75rem; font-family: monospace; word-break: break-all;"></span>
+            </div>
+            <div class="summary-item">
+                <span class="summary-label">Signature</span>
+                <span class="summary-value" style="color: var(--success);">Captured</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Section 4: Restore -->
+    <div id="section-restore" class="form-section hidden">
+        <h3>Restore Configuration</h3>
+        <p class="text-muted mb-2" style="font-size: 0.875rem;">
+            If you have a previously exported <code>.enc</code> configuration backup, upload it here to restore your settings.
+        </p>
+        <div class="form-group">
+            <label for="restore-file">Configuration Backup (.enc)</label>
+            <input type="file" id="restore-file" accept=".enc" onchange="restoreConfig()">
+        </div>
+        <div id="restore-status" class="hidden" style="margin-top: 0.5rem;"></div>
+    </div>
+
+    <!-- Hidden form: POST to wizard_wallet -->
+    <form id="wallet-form" method="POST" action="{{ url_for('wizard_wallet') }}">
+        <input type="hidden" name="admin_wallet" id="form-admin-wallet" value="">
+        <input type="hidden" name="admin_signature" id="form-admin-signature" value="">
+        <input type="hidden" name="public_secret" id="form-public-secret" value="">
+
+        <div class="flex justify-between" style="margin-top: 2rem;">
+            <span></span>
+            <button type="submit" class="btn btn-primary" id="continue-btn" disabled>Continue</button>
+        </div>
+    </form>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+var walletApi = null;
+var walletName = '';
+var hexAddress = '';
+var bech32Address = '';
+
+// ---- Bech32 encoder (for display) ----
+var BECH32_CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
+
+function bech32Polymod(values) {
+    var GEN = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3];
+    var chk = 1;
+    for (var i = 0; i < values.length; i++) {
+        var b = chk >> 25;
+        chk = ((chk & 0x1ffffff) << 5) ^ values[i];
+        for (var j = 0; j < 5; j++) {
+            if ((b >> j) & 1) chk ^= GEN[j];
+        }
+    }
+    return chk;
+}
+
+function bech32HrpExpand(hrp) {
+    var ret = [];
+    for (var i = 0; i < hrp.length; i++) ret.push(hrp.charCodeAt(i) >> 5);
+    ret.push(0);
+    for (var i = 0; i < hrp.length; i++) ret.push(hrp.charCodeAt(i) & 31);
+    return ret;
+}
+
+function bech32CreateChecksum(hrp, data) {
+    var values = bech32HrpExpand(hrp).concat(data).concat([0, 0, 0, 0, 0, 0]);
+    var polymod = bech32Polymod(values) ^ 1;
+    var ret = [];
+    for (var i = 0; i < 6; i++) ret.push((polymod >> (5 * (5 - i))) & 31);
+    return ret;
+}
+
+function bech32Encode(hrp, data) {
+    var combined = data.concat(bech32CreateChecksum(hrp, data));
+    var ret = hrp + '1';
+    for (var i = 0; i < combined.length; i++) ret += BECH32_CHARSET[combined[i]];
+    return ret;
+}
+
+function convertBits(data, fromBits, toBits, pad) {
+    var acc = 0, bits = 0, ret = [], maxv = (1 << toBits) - 1;
+    for (var i = 0; i < data.length; i++) {
+        acc = (acc << fromBits) | data[i];
+        bits += fromBits;
+        while (bits >= toBits) {
+            bits -= toBits;
+            ret.push((acc >> bits) & maxv);
+        }
+    }
+    if (pad && bits > 0) ret.push((acc << (toBits - bits)) & maxv);
+    return ret;
+}
+
+function hexToBytes(hex) {
+    var bytes = [];
+    for (var i = 0; i < hex.length; i += 2) bytes.push(parseInt(hex.substr(i, 2), 16));
+    return bytes;
+}
+
+function hexAddressToBech32(hex) {
+    var bytes = hexToBytes(hex);
+    // First nibble of first byte determines network: 0xxx = testnet, 1xxx = mainnet (bit 0)
+    var networkBit = bytes[0] & 0x0f;
+    var hrp = (networkBit === 0 || networkBit === 1) ? 'addr' : 'addr_test';
+    // Cardano: networkId 0 = testnet, 1 = mainnet
+    if (networkBit === 0) hrp = 'addr_test';
+    else if (networkBit === 1) hrp = 'addr';
+    else hrp = 'addr_test';  // default to testnet for other network IDs
+    var words = convertBits(bytes, 8, 5, true);
+    return bech32Encode(hrp, words);
+}
+
+// ---- Wallet detection ----
+var KNOWN_WALLETS = ['eternl', 'nami', 'lace', 'flint', 'typhon', 'yoroi', 'gerowallet', 'nufi'];
+
+function detectWallets() {
+    var list = document.getElementById('wallet-list');
+    var cardano = window.cardano;
+    if (!cardano) {
+        document.getElementById('no-wallets').classList.remove('hidden');
+        return;
+    }
+
+    var found = 0;
+
+    // Known wallets first
+    for (var i = 0; i < KNOWN_WALLETS.length; i++) {
+        var name = KNOWN_WALLETS[i];
+        if (cardano[name] && cardano[name].enable) {
+            addWalletButton(list, name, cardano[name].name || name);
+            found++;
+        }
+    }
+
+    // Any other CIP-30 wallets
+    var keys = Object.keys(cardano);
+    for (var j = 0; j < keys.length; j++) {
+        var k = keys[j];
+        if (KNOWN_WALLETS.indexOf(k) === -1 && cardano[k] && typeof cardano[k].enable === 'function') {
+            addWalletButton(list, k, cardano[k].name || k);
+            found++;
+        }
+    }
+
+    if (found === 0) {
+        document.getElementById('no-wallets').classList.remove('hidden');
+    }
+}
+
+function addWalletButton(container, id, label) {
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn btn-secondary';
+    btn.textContent = label;
+    btn.onclick = function() { connectWallet(id, label); };
+    container.appendChild(btn);
+}
+
+async function connectWallet(id, label) {
+    var statusDiv = document.getElementById('connect-status');
+    statusDiv.classList.remove('hidden');
+    statusDiv.innerHTML = '<div class="status-indicator">Connecting to ' + label + '...</div>';
+
+    try {
+        walletApi = await window.cardano[id].enable();
+        walletName = label;
+
+        var addresses = await walletApi.getUsedAddresses();
+        if (!addresses || addresses.length === 0) {
+            addresses = await walletApi.getUnusedAddresses();
+        }
+        if (!addresses || addresses.length === 0) {
+            statusDiv.innerHTML = '<div class="status-indicator error">No addresses found in wallet.</div>';
+            return;
+        }
+
+        hexAddress = addresses[0];
+        bech32Address = hexAddressToBech32(hexAddress);
+
+        statusDiv.innerHTML = '<div class="status-indicator success">Connected: ' + bech32Address.slice(0, 16) + '...' + bech32Address.slice(-8) + '</div>';
+
+        // Show sign section
+        document.getElementById('section-sign').classList.remove('hidden');
+    } catch (e) {
+        statusDiv.innerHTML = '<div class="status-indicator error">Connection rejected: ' + (e.message || e) + '</div>';
+    }
+}
+
+// ---- Signing ----
+async function signMessage() {
+    var publicSecret = document.getElementById('public-secret-input').value.trim();
+    if (!publicSecret) {
+        alert('Please enter the public secret.');
+        return;
+    }
+    if (!walletApi) {
+        alert('No wallet connected.');
+        return;
+    }
+
+    var btn = document.getElementById('sign-btn');
+    var statusDiv = document.getElementById('sign-status');
+    btn.disabled = true;
+    btn.textContent = 'Signing...';
+    statusDiv.classList.remove('hidden');
+    statusDiv.innerHTML = '<div class="status-indicator">Waiting for wallet approval...</div>';
+
+    try {
+        // Encode message as hex
+        var encoder = new TextEncoder();
+        var bytes = encoder.encode(publicSecret);
+        var hexPayload = '';
+        for (var i = 0; i < bytes.length; i++) {
+            hexPayload += bytes[i].toString(16).padStart(2, '0');
+        }
+
+        var result = await walletApi.signData(hexAddress, hexPayload);
+        // result = { signature: hex COSE_Sign1, key: hex COSE_Key }
+
+        var sigJson = JSON.stringify({ signature: result.signature, key: result.key });
+
+        // Fill hidden form
+        document.getElementById('form-admin-wallet').value = bech32Address;
+        document.getElementById('form-admin-signature').value = sigJson;
+        document.getElementById('form-public-secret').value = publicSecret;
+
+        // Show confirmed section
+        document.getElementById('confirmed-wallet-name').textContent = walletName;
+        document.getElementById('confirmed-address').textContent = bech32Address;
+        document.getElementById('section-sign').classList.add('hidden');
+        document.getElementById('section-confirmed').classList.remove('hidden');
+        document.getElementById('section-restore').classList.remove('hidden');
+        document.getElementById('continue-btn').disabled = false;
+
+        statusDiv.classList.add('hidden');
+    } catch (e) {
+        statusDiv.innerHTML = '<div class="status-indicator error">Signing failed: ' + (e.message || e) + '</div>';
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Sign with Wallet';
+    }
+}
+
+// ---- Config restore ----
+function restoreConfig() {
+    var fileInput = document.getElementById('restore-file');
+    var statusDiv = document.getElementById('restore-status');
+
+    if (!fileInput.files || fileInput.files.length === 0) return;
+
+    var formData = new FormData();
+    formData.append('config', fileInput.files[0]);
+
+    var adminSig = document.getElementById('form-admin-signature').value;
+    if (adminSig) {
+        formData.append('admin_signature', adminSig);
+    }
+
+    statusDiv.classList.remove('hidden');
+    statusDiv.innerHTML = '<div class="status-indicator">Restoring configuration...</div>';
+
+    fetch('/api/restore-config', {
+        method: 'POST',
+        body: formData
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+        if (data.error) {
+            statusDiv.innerHTML = '<div class="status-indicator error">Restore failed: ' + data.error + '</div>';
+        } else {
+            statusDiv.innerHTML = '<div class="status-indicator success">Configuration restored. Reloading...</div>';
+            setTimeout(function() { window.location.reload(); }, 1500);
+        }
+    })
+    .catch(function(err) {
+        statusDiv.innerHTML = '<div class="status-indicator error">Error: ' + err.message + '</div>';
+    });
+}
+
+// ---- Init: detect wallets with retry ----
+function detectWithRetry(attempt) {
+    if (attempt > 5) {
+        document.getElementById('no-wallets').classList.remove('hidden');
+        return;
+    }
+    var c = window.cardano;
+    if (c && typeof c === 'object' && Object.keys(c).length > 0) {
+        detectWallets();
+    } else {
+        setTimeout(function() { detectWithRetry(attempt + 1); }, 300 * attempt);
+    }
+}
+
+if (document.readyState === 'complete') {
+    detectWithRetry(0);
+} else {
+    window.addEventListener('load', function() { detectWithRetry(0); });
+}
+</script>
+{% endblock %}
