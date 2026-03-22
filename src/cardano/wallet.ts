@@ -9,7 +9,7 @@
 
 import { Bip32PrivateKey } from "@stricahq/bip32ed25519";
 import { mnemonicToEntropy, validateMnemonic } from "bip39";
-import { pubKeyAddress, serializeAddressObj } from "@meshsdk/core";
+import { bech32 } from "bech32";
 import type { CardanoNetwork } from "./types.js";
 
 export interface CardanoWallet {
@@ -21,6 +21,23 @@ export interface CardanoWallet {
   stakeKeyHash: string;        // blake2b-224 hash of stake pubkey (hex)
   address: string;             // bech32 base address
   network: CardanoNetwork;
+}
+
+/**
+ * Construct a Cardano base address (type 0) from key hashes.
+ * Header byte: 0b0000_xxxx where xxxx = network_id (0 = testnet, 1 = mainnet)
+ * Payload: header(1) + payment_key_hash(28) + stake_key_hash(28) = 57 bytes
+ */
+function buildBaseAddress(paymentKeyHash: string, stakeKeyHash: string, networkId: number): string {
+  const header = networkId & 0x0f;
+  const payload = Buffer.concat([
+    Buffer.from([header]),
+    Buffer.from(paymentKeyHash, "hex"),
+    Buffer.from(stakeKeyHash, "hex"),
+  ]);
+  const words = bech32.toWords(payload);
+  const prefix = networkId === 1 ? "addr" : "addr_test";
+  return bech32.encode(prefix, words, 1023);
 }
 
 /**
@@ -61,10 +78,9 @@ export async function deriveWallet(
   const paymentKeyHash = paymentPubKey.hash().toString("hex");
   const stakeKeyHash = stakePubKey.hash().toString("hex");
 
-  // Build bech32 base address using MeshJS
+  // Build bech32 base address (type 0: payment key hash + stake key hash)
   const networkId = network === "mainnet" ? 1 : 0;
-  const addrObj = pubKeyAddress(paymentKeyHash, stakeKeyHash);
-  const address = serializeAddressObj(addrObj, networkId);
+  const address = buildBaseAddress(paymentKeyHash, stakeKeyHash, networkId);
 
   return {
     paymentKey: new Uint8Array(paymentPrivKey.toBytes()),
