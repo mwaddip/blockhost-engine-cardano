@@ -183,9 +183,10 @@ npx esbuild "$PROJECT_DIR/scripts/keygen.ts" \
     --bundle \
     --platform=node \
     --target=node22 \
-    --format=esm \
+    --format=cjs \
     --minify \
-    --banner:js='import{createRequire}from"module";const require=createRequire(import.meta.url);' \
+    --external:@stricahq/bip32ed25519 \
+    --external:libsodium-wrappers-sumo \
     --outfile="$PKG_DIR/usr/share/blockhost/keygen.js"
 
 if [ -f "$PKG_DIR/usr/share/blockhost/keygen.js" ]; then
