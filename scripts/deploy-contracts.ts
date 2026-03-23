@@ -222,13 +222,17 @@ async function main(): Promise<void> {
     try {
       const txHash = await provider.submitTx(bytesToHex(finalTx));
       process.stderr.write(`  Deployed: ${txHash}#0\n`);
-      // stdout: key=value for wizard parsing
-      process.stdout.write(`${target.key}=${validator.hash}\n`);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      process.stderr.write(`  Failed: ${msg.slice(0, 300)}\n`);
-      process.exit(1);
+      if (msg.includes("already been included") || msg.includes("BadInputsUTxO")) {
+        process.stderr.write(`  Already deployed (skipping)\n`);
+      } else {
+        process.stderr.write(`  Failed: ${msg.slice(0, 300)}\n`);
+        process.exit(1);
+      }
     }
+    // Always emit the hash — the script hash is deterministic from compiledCode
+    process.stdout.write(`${target.key}=${validator.hash}\n`);
 
     // Wait between deploys for UTXO indexing
     if (targets.indexOf(target) < targets.length - 1) {
