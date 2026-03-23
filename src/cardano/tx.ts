@@ -508,11 +508,35 @@ export async function buildAndSubmitScriptTx(params: {
       }
     }
 
-    // Change output (wallet gets back its excess)
+    // Change output (wallet gets back its excess ADA + any tokens)
     const totalInputLv = scriptInputLovelace + walletInputTotal.lovelace;
     const changeLv = totalInputLv - outputLovelace - fee;
-    if (changeLv >= 1000000n) {
-      outs.push(buildOutputCbor(addressToHex(walletAddress), changeLv));
+
+    // Collect leftover tokens from wallet inputs not consumed by outputs
+    const changeTokens: [string, bigint][] = [];
+    const walletTokens = new Map<string, bigint>();
+    for (const [unit, qty] of Object.entries(walletInputTotal)) {
+      if (unit !== "lovelace" && qty > 0n) walletTokens.set(unit, qty);
+    }
+    // Subtract tokens sent in explicit outputs
+    for (const out of outputs) {
+      for (const [unit, qty] of Object.entries(out.assets)) {
+        if (unit !== "lovelace") {
+          const have = walletTokens.get(unit) ?? 0n;
+          const rem = have - qty;
+          if (rem > 0n) walletTokens.set(unit, rem);
+          else walletTokens.delete(unit);
+        }
+      }
+    }
+    for (const [unit, qty] of walletTokens) {
+      changeTokens.push([unit, qty]);
+    }
+
+    if (changeLv >= 1000000n || changeTokens.length > 0) {
+      const actualChangeLv = changeLv < 1000000n ? 1000000n : changeLv;
+      outs.push(buildOutputCbor(addressToHex(walletAddress), actualChangeLv,
+        changeTokens.length > 0 ? changeTokens : undefined));
     }
 
     return outs;

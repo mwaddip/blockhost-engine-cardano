@@ -22,9 +22,7 @@ import {
   cborTag,
   hexToBytes,
   bytesToHex,
-  decodeCbor,
 } from "./cbor.js";
-import type { CborValue } from "./cbor.js";
 
 // ── Constr ──────────────────────────────────────────────────────────────────
 
@@ -98,70 +96,119 @@ function encodeConstr(constr: Constr<PlutusField>): Uint8Array {
 
 // ── Decode ──────────────────────────────────────────────────────────────────
 
-/** Decode a CBOR Plutus Data value back into Constr / bigint / string / etc. */
+/** Read CBOR argument value at pos (after initial byte). Returns [argVal, newPos]. */
+function readCborArg(bytes: Uint8Array, pos: number, additional: number): [bigint, number] {
+  if (additional < 24) return [BigInt(additional), pos];
+  if (additional === 24) return [BigInt(bytes[pos]!), pos + 1];
+  if (additional === 25) {
+    return [BigInt((bytes[pos]! << 8) | bytes[pos + 1]!), pos + 2];
+  }
+  if (additional === 26) {
+    return [BigInt(((bytes[pos]! << 24) | (bytes[pos + 1]! << 16) | (bytes[pos + 2]! << 8) | bytes[pos + 3]!) >>> 0), pos + 4];
+  }
+  if (additional === 27) {
+    let v = 0n;
+    for (let i = 0; i < 8; i++) v = (v << 8n) | BigInt(bytes[pos + i]!);
+    return [v, pos + 8];
+  }
+  if (additional === 31) return [-1n, pos]; // indefinite
+  throw new Error("CBOR: unsupported additional " + additional);
+}
+
+/**
+ * Decode a CBOR Plutus Data value. Fully recursive — preserves Constr tags
+ * through nested arrays, maps, etc. Does NOT delegate to the generic decodeCbor.
+ */
 function decodeField(bytes: Uint8Array, pos: number): { value: PlutusField; offset: number } {
   const initial = bytes[pos]!;
   const major = initial >> 5;
   const additional = initial & 0x1f;
+  pos++;
 
-  // Check for tag (major 6) first — Constr encoding
-  if (major === 6) {
-    // Peek at tag number
-    let tagNum: number;
-    let tagEnd: number;
-    if (additional < 24) {
-      tagNum = additional;
-      tagEnd = pos + 1;
-    } else if (additional === 24) {
-      tagNum = bytes[pos + 1]!;
-      tagEnd = pos + 2;
-    } else {
-      // Larger tag — fall through to generic decoder
-      const raw = decodeCbor(bytes, pos);
-      return { value: cborToPlutus(raw.value), offset: raw.offset };
-    }
+  const [argVal, argEnd] = readCborArg(bytes, pos, additional);
+  pos = argEnd;
 
-    if (tagNum >= 121 && tagNum <= 127) {
-      // Constr 0-6
-      const inner = decodeCbor(bytes, tagEnd);
-      const fields = (inner.value as CborValue[]).map(cborToPlutus);
-      return { value: new Constr(tagNum - 121, fields), offset: inner.offset };
+  switch (major) {
+    case 0: // unsigned int
+      return { value: argVal, offset: pos };
+    case 1: // negative int
+      return { value: -1n - argVal, offset: pos };
+    case 2: { // byte string → hex
+      const len = Number(argVal);
+      const val = bytesToHex(bytes.slice(pos, pos + len));
+      return { value: val, offset: pos + len };
     }
-    if (tagNum === 102) {
-      // Constr 7+: [index, fields]
-      const inner = decodeCbor(bytes, tagEnd);
-      const arr = inner.value as CborValue[];
-      const index = Number(arr[0] as bigint);
-      const fields = (arr[1] as CborValue[]).map(cborToPlutus);
-      return { value: new Constr(index, fields), offset: inner.offset };
+    case 3: { // text string
+      const len = Number(argVal);
+      const val = new TextDecoder().decode(bytes.slice(pos, pos + len));
+      return { value: val, offset: pos + len };
     }
-
-    // Unknown tag — decode generically
-    const decoded = decodeCbor(bytes, pos);
-    return { value: cborToPlutus(decoded.value), offset: decoded.offset };
+    case 4: { // array — decode children with decodeField (preserves Constr)
+      const arr: PlutusField[] = [];
+      if (argVal < 0n) {
+        while (bytes[pos] !== 0xff) {
+          const item = decodeField(bytes, pos);
+          arr.push(item.value);
+          pos = item.offset;
+        }
+        pos++; // skip break
+      } else {
+        for (let i = 0; i < Number(argVal); i++) {
+          const item = decodeField(bytes, pos);
+          arr.push(item.value);
+          pos = item.offset;
+        }
+      }
+      return { value: arr, offset: pos };
+    }
+    case 5: { // map
+      const map = new Map<PlutusField, PlutusField>();
+      if (argVal < 0n) {
+        while (bytes[pos] !== 0xff) {
+          const k = decodeField(bytes, pos);
+          const v = decodeField(bytes, k.offset);
+          map.set(k.value, v.value);
+          pos = v.offset;
+        }
+        pos++;
+      } else {
+        for (let i = 0; i < Number(argVal); i++) {
+          const k = decodeField(bytes, pos);
+          const v = decodeField(bytes, k.offset);
+          map.set(k.value, v.value);
+          pos = v.offset;
+        }
+      }
+      return { value: map, offset: pos };
+    }
+    case 6: { // tag — Constr encoding
+      if (argVal >= 121n && argVal <= 127n) {
+        // Constr 0-6: tag content is the fields array
+        const inner = decodeField(bytes, pos);
+        const fields = inner.value as PlutusField[];
+        return { value: new Constr(Number(argVal) - 121, fields), offset: inner.offset };
+      }
+      if (argVal === 102n) {
+        // Constr 7+: content is [index, fields]
+        const inner = decodeField(bytes, pos);
+        const arr = inner.value as PlutusField[];
+        const index = Number(arr[0] as bigint);
+        const fields = arr[1] as PlutusField[];
+        return { value: new Constr(index, fields), offset: inner.offset };
+      }
+      // Unknown tag — decode content and return as-is
+      const inner = decodeField(bytes, pos);
+      return { value: inner.value, offset: inner.offset };
+    }
+    case 7: { // simple values
+      if (argVal === 20n) return { value: 0n, offset: pos }; // false
+      if (argVal === 21n) return { value: 1n, offset: pos }; // true
+      if (argVal === 22n) return { value: 0n, offset: pos }; // null
+      return { value: BigInt(Number(argVal)), offset: pos };
+    }
+    default:
+      throw new Error("CBOR: unsupported major type " + major);
   }
-
-  // Non-tag: use generic decoder
-  const decoded = decodeCbor(bytes, pos);
-  return { value: cborToPlutus(decoded.value), offset: decoded.offset };
-}
-
-/** Convert a generic CBOR decoded value to a Plutus field. */
-function cborToPlutus(value: CborValue): PlutusField {
-  if (typeof value === "bigint") return value;
-  if (value instanceof Uint8Array) return bytesToHex(value);
-  if (Array.isArray(value)) return value.map(cborToPlutus);
-  if (value instanceof Map) {
-    const m = new Map<PlutusField, PlutusField>();
-    for (const [k, v] of value) {
-      m.set(cborToPlutus(k), cborToPlutus(v));
-    }
-    return m;
-  }
-  if (typeof value === "number") return BigInt(value);
-  if (value === null || value === undefined) return 0n;
-  if (typeof value === "boolean") return value ? 1n : 0n;
-  throw new Error(`Unexpected CBOR value in Plutus Data: ${typeof value}`);
 }
 
 // ── Public API (matches Lucid's Data) ───────────────────────────────────────
