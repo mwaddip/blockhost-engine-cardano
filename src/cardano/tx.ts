@@ -345,43 +345,29 @@ export async function buildAndSubmitTransfer(params: {
     return outs;
   }
 
-  // 3. First pass: build full tx with placeholder fee to measure size
-  const firstOutputs = buildOutputs(maxFee);
-  const firstBody = buildTxBody(sortedInputs, firstOutputs, maxFee, ttl);
-  const firstBodyHash = blake2b(firstBody, { dkLen: 32 });
-  const { witnessSet: firstWitness } = buildWitnessSet(firstBodyHash, kL, kR, PrivateKey);
-  const firstTx = assembleTx(firstBody, firstWitness);
+  // 3. Iterative fee calculation — rebuild until fee stabilizes
+  let currentFee = maxFee;
+  for (let i = 0; i < 5; i++) {
+    const outs = buildOutputs(currentFee);
+    const body = buildTxBody(sortedInputs, outs, currentFee, ttl);
+    const bodyHash = blake2b(body, { dkLen: 32 });
+    const { witnessSet: ws } = buildWitnessSet(bodyHash, kL, kR, PrivateKey);
+    const tx = assembleTx(body, ws);
+    const neededFee = calculateFee(tx.length, pp);
 
-  // 4. Calculate exact fee from measured size
-  const exactFee = calculateFee(firstTx.length, pp);
-
-  // 5. Second pass: rebuild with correct fee
-  const finalOutputs = buildOutputs(exactFee);
-  const finalBody = buildTxBody(sortedInputs, finalOutputs, exactFee, ttl);
-  const finalBodyHash = blake2b(finalBody, { dkLen: 32 });
-  const { witnessSet: finalWitness } = buildWitnessSet(finalBodyHash, kL, kR, PrivateKey);
-  const finalTx = assembleTx(finalBody, finalWitness);
-
-  // Sanity check: the fee we computed covers the final tx size
-  const verifyFee = calculateFee(finalTx.length, pp);
-  if (verifyFee > exactFee) {
-    // Size grew (fee field encoding changed) — use the larger fee
-    // This can happen if the fee shrink causes the CBOR encoding to change size,
-    // but since we go from a larger placeholder to a smaller exact fee, the change
-    // output grows and the tx size stays the same or shrinks. If it grew, rebuild.
-    const safeOutputs = buildOutputs(verifyFee);
-    const safeBody = buildTxBody(sortedInputs, safeOutputs, verifyFee, ttl);
-    const safeBodyHash = blake2b(safeBody, { dkLen: 32 });
-    const { witnessSet: safeWitness } = buildWitnessSet(safeBodyHash, kL, kR, PrivateKey);
-    const safeTx = assembleTx(safeBody, safeWitness);
-
-    const txHash = await provider.submitTx(bytesToHex(safeTx));
-    return txHash;
+    if (neededFee <= currentFee) {
+      return provider.submitTx(bytesToHex(tx));
+    }
+    currentFee = neededFee;
   }
 
-  // 6. Submit
-  const txHash = await provider.submitTx(bytesToHex(finalTx));
-  return txHash;
+  // Fallback
+  const outs = buildOutputs(currentFee);
+  const body = buildTxBody(sortedInputs, outs, currentFee, ttl);
+  const bodyHash = blake2b(body, { dkLen: 32 });
+  const { witnessSet: ws } = buildWitnessSet(bodyHash, kL, kR, PrivateKey);
+  const tx = assembleTx(body, ws);
+  return provider.submitTx(bytesToHex(tx));
 }
 
 // ── Script transaction builder ──────────────────────────────────────────────
@@ -794,28 +780,26 @@ export async function buildAndSubmitScriptTx(params: {
     ? { mem: EX_MEM * BigInt(numRedeemers), steps: EX_STEPS * BigInt(numRedeemers) }
     : undefined;
 
-  // 4. Two-pass fee calculation
-  const firstBody = buildFullTxBody(maxFee);
-  const firstHash = blake2b(firstBody, { dkLen: 32 });
-  const firstWitness = buildFullWitnessSet(firstHash);
-  const firstTx = assembleTx(firstBody, firstWitness);
+  // 4. Iterative fee calculation — rebuild until fee stabilizes
+  let currentFee = maxFee;
+  for (let i = 0; i < 5; i++) {
+    const body = buildFullTxBody(currentFee);
+    const hash = blake2b(body, { dkLen: 32 });
+    const witness = buildFullWitnessSet(hash);
+    const tx = assembleTx(body, witness);
+    const neededFee = calculateFee(tx.length, pp, totalExUnits);
 
-  const exactFee = calculateFee(firstTx.length, pp, totalExUnits);
-
-  const finalBody = buildFullTxBody(exactFee);
-  const finalHash = blake2b(finalBody, { dkLen: 32 });
-  const finalWitness = buildFullWitnessSet(finalHash);
-  const finalTx = assembleTx(finalBody, finalWitness);
-
-  // Verify fee covers final size
-  const verifyFee = calculateFee(finalTx.length, pp, totalExUnits);
-  if (verifyFee > exactFee) {
-    const safeBody = buildFullTxBody(verifyFee);
-    const safeHash = blake2b(safeBody, { dkLen: 32 });
-    const safeWitness = buildFullWitnessSet(safeHash);
-    const safeTx = assembleTx(safeBody, safeWitness);
-    return provider.submitTx(bytesToHex(safeTx));
+    if (neededFee <= currentFee) {
+      // Fee is sufficient — submit
+      return provider.submitTx(bytesToHex(tx));
+    }
+    currentFee = neededFee;
   }
 
-  return provider.submitTx(bytesToHex(finalTx));
+  // Fallback: use the last computed fee
+  const body = buildFullTxBody(currentFee);
+  const hash = blake2b(body, { dkLen: 32 });
+  const witness = buildFullWitnessSet(hash);
+  const tx = assembleTx(body, witness);
+  return provider.submitTx(bytesToHex(tx));
 }
