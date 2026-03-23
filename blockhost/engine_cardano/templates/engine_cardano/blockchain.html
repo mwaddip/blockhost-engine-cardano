@@ -543,14 +543,7 @@ document.getElementById('blockchain-form').addEventListener('submit', function(e
 });
 
 // ---- Koios URL helper ----
-function koiosUrl() {
-    var network = document.getElementById('network').value;
-    if (network === 'mainnet') return 'https://api.koios.rest/api/v1';
-    if (network === 'preview') return 'https://preview.koios.rest/api/v1';
-    return 'https://preprod.koios.rest/api/v1';
-}
-
-// ---- Balance check via Koios ----
+// ---- Balance check via backend proxy (avoids CORS) ----
 function checkBalance(mode) {
     var addr = mode === 'generate'
         ? document.getElementById('deployer-address').textContent.trim()
@@ -559,15 +552,15 @@ function checkBalance(mode) {
     if (!addr || addr === '-') { balanceEl.textContent = '—'; return; }
 
     balanceEl.textContent = '...';
-    fetch(koiosUrl() + '/address_info', {
+    fetch('{{ url_for("engine_cardano.api_balance") }}', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ _addresses: [addr] })
+        body: JSON.stringify({ address: addr })
     })
     .then(function(r) { return r.json(); })
     .then(function(data) {
-        if (data && data[0] && data[0].balance) {
-            var ada = (parseInt(data[0].balance) / 1000000).toFixed(2);
+        if (data && data.balance) {
+            var ada = (parseInt(data.balance) / 1000000).toFixed(2);
             balanceEl.textContent = ada + ' ADA';
         } else {
             balanceEl.textContent = '0 ADA';
@@ -770,9 +763,9 @@ async function topUpWallet(mode) {
 
         // Get current slot for TTL
         statusEl.textContent = 'Building transaction...';
-        var tipResp = await fetch(koiosUrl() + '/tip');
+        var tipResp = await fetch('{{ url_for("engine_cardano.api_tip") }}');
         var tip = await tipResp.json();
-        var ttl = BigInt(parseInt(tip[0].abs_slot) + 900);
+        var ttl = BigInt(parseInt(tip.abs_slot) + 900);
 
         var txBody = cborMap([
             [cborUint(0n), inputsCbor],

@@ -248,6 +248,92 @@ def api_validate_mnemonic():
         return jsonify({"error": "Validation timed out"}), 500
 
 
+@blueprint.route("/api/blockchain/balance", methods=["POST"])
+def api_balance():
+    """Query ADA balance for an address via Koios (proxied to avoid CORS)."""
+    data = request.get_json()
+    address = (data or {}).get("address", "").strip()
+    if not address:
+        return jsonify({"error": "Address required"}), 400
+
+    blockchain = session.get("blockchain", {})
+    network = blockchain.get("network", "preprod")
+    koios = _koios_url(network)
+
+    try:
+        import urllib.request
+
+        req = urllib.request.Request(
+            f"{koios}/address_info",
+            data=json.dumps({"_addresses": [address]}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            result = json.loads(resp.read())
+            if result and len(result) > 0 and "balance" in result[0]:
+                return jsonify({"balance": result[0]["balance"]})
+            return jsonify({"balance": "0"})
+    except Exception as e:
+        return jsonify({"balance": "0", "error": str(e)})
+
+
+@blueprint.route("/api/blockchain/tip", methods=["GET"])
+def api_tip():
+    """Get current slot tip via Koios (proxied to avoid CORS)."""
+    blockchain = session.get("blockchain", {})
+    network = blockchain.get("network", "preprod")
+    koios = _koios_url(network)
+
+    try:
+        import urllib.request
+
+        req = urllib.request.Request(
+            f"{koios}/tip",
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            result = json.loads(resp.read())
+            if result and len(result) > 0:
+                return jsonify(result[0])
+            return jsonify({"error": "No tip data"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@blueprint.route("/api/blockchain/submit", methods=["POST"])
+def api_submit():
+    """Submit a signed transaction via Koios (proxied to avoid CORS)."""
+    blockchain = session.get("blockchain", {})
+    network = blockchain.get("network", "preprod")
+    koios = _koios_url(network)
+
+    try:
+        import urllib.request
+
+        cbor_data = request.get_data()
+        req = urllib.request.Request(
+            f"{koios}/submittx",
+            data=cbor_data,
+            headers={"Content-Type": "application/cbor"},
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            tx_hash = resp.read().decode().strip().strip('"')
+            return jsonify({"txHash": tx_hash})
+    except urllib.error.HTTPError as e:
+        body = e.read().decode() if hasattr(e, "read") else str(e)
+        return jsonify({"error": body}), e.code
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+def _koios_url(network: str) -> str:
+    if network == "mainnet":
+        return "https://api.koios.rest/api/v1"
+    if network == "preview":
+        return "https://preview.koios.rest/api/v1"
+    return "https://preprod.koios.rest/api/v1"
+
+
 # ---------------------------------------------------------------------------
 # Summary & UI
 # ---------------------------------------------------------------------------
