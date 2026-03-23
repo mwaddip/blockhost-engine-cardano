@@ -656,24 +656,44 @@ def finalize_contracts(config: dict) -> tuple[bool, Optional[str]]:
         if result.returncode != 0:
             return False, f"Validator deployment failed: {result.stderr or result.stdout}"
 
-        # Parse policy IDs from stdout (one per line, 56 hex chars)
-        policy_ids = [
-            line.strip()
-            for line in result.stdout.strip().split("\n")
-            if POLICY_ID_RE.match(line.strip())
-        ]
+        # Parse key=value output from deploy script
+        # Format: subscription_validator_hash=XXXX, beacon_policy_id=XXXX, nft_policy_id=XXXX
+        kv: dict[str, str] = {}
+        for line in result.stdout.strip().split("\n"):
+            line = line.strip()
+            if "=" in line:
+                key, _, val = line.partition("=")
+                if POLICY_ID_RE.match(val.strip()):
+                    kv[key.strip()] = val.strip()
+            elif POLICY_ID_RE.match(line):
+                # Bare hex line (legacy format)
+                kv[f"_bare_{len(kv)}"] = line
 
-        if len(policy_ids) >= 2:
-            blockchain["nft_policy_id"] = policy_ids[0]
-            blockchain["subscription_policy_id"] = policy_ids[1]
+        # Extract policy IDs by key name or fall back to positional
+        sub = kv.get("subscription_validator_hash", "")
+        nft = kv.get("nft_policy_id", "")
+        beacon = kv.get("beacon_policy_id", "")
+
+        # Fallback: positional bare hex lines
+        if not sub or not nft:
+            bare = [v for k, v in kv.items() if k.startswith("_bare_")]
+            if len(bare) >= 2:
+                sub = sub or bare[0]
+                nft = nft or bare[1]
+
+        if sub and nft:
+            blockchain["nft_policy_id"] = nft
+            blockchain["subscription_policy_id"] = sub
+            if beacon:
+                blockchain["beacon_policy_id"] = beacon
             config["blockchain"] = blockchain
             config["_step_result_contracts"] = {
-                "nft_policy_id": policy_ids[0],
-                "subscription_policy_id": policy_ids[1],
+                "nft_policy_id": nft,
+                "subscription_policy_id": sub,
             }
             return True, None
 
-        return False, f"Expected 2 policy IDs, got {len(policy_ids)}"
+        return False, f"Expected 2 policy IDs, got {len(kv)}"
 
     except subprocess.TimeoutExpired:
         return False, "Validator deployment timed out (10 minutes)"
