@@ -38,6 +38,19 @@ export interface CardanoProvider {
 
   /** Get address summary (balances) */
   fetchAddressInfo(address: string): Promise<unknown>;
+
+  /** Get protocol parameters (fee coefficients, min UTXO) */
+  fetchProtocolParams(): Promise<ProtocolParams>;
+}
+
+/** Subset of protocol parameters needed for tx building. */
+export interface ProtocolParams {
+  /** Fee per byte (minFeeA / txFeePerByte), lovelace */
+  minFeeA: number;
+  /** Fixed fee component (minFeeB / txFeeFixed), lovelace */
+  minFeeB: number;
+  /** Coins per UTXO byte (for min UTXO calculation) */
+  coinsPerUtxoByte: number;
 }
 
 // ── Koios provider ──────────────────────────────────────────────────────────
@@ -207,6 +220,17 @@ class KoiosProvider implements CardanoProvider {
     }) as unknown[] | null;
     return result?.[0] ?? null;
   }
+
+  async fetchProtocolParams(): Promise<ProtocolParams> {
+    const result = await this.request("/epoch_params?limit=1") as Array<Record<string, unknown>> | null;
+    if (!result || result.length === 0) throw new Error("Failed to fetch protocol params from Koios");
+    const p = result[0]!;
+    return {
+      minFeeA: Number(p["min_fee_a"] ?? 44),
+      minFeeB: Number(p["min_fee_b"] ?? 155381),
+      coinsPerUtxoByte: Number(p["coins_per_utxo_size"] ?? 4310),
+    };
+  }
 }
 
 // ── Blockfrost provider (wraps @blockfrost/blockfrost-js) ───────────────────
@@ -292,6 +316,15 @@ class BlockfrostProvider implements CardanoProvider {
       if (this.is404(err)) return null;
       throw err;
     }
+  }
+
+  async fetchProtocolParams(): Promise<ProtocolParams> {
+    const p = await this.client.epochsLatestParameters();
+    return {
+      minFeeA: p.min_fee_a,
+      minFeeB: p.min_fee_b,
+      coinsPerUtxoByte: Number(p.coins_per_utxo_size ?? "4310"),
+    };
   }
 
   private is404(err: unknown): boolean {
