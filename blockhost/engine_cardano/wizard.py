@@ -605,6 +605,9 @@ def finalize_contracts(config: dict) -> tuple[bool, Optional[str]]:
             if not POLICY_ID_RE.match(sub):
                 return False, f"Invalid subscription policy ID: {sub}"
 
+            blockchain["nft_contract"] = nft
+            blockchain["subscription_contract"] = sub
+            config["blockchain"] = blockchain
             config["_step_result_contracts"] = {
                 "nft_policy_id": nft,
                 "subscription_policy_id": sub,
@@ -615,6 +618,9 @@ def finalize_contracts(config: dict) -> tuple[bool, Optional[str]]:
         nft = blockchain.get("nft_policy_id", "")
         sub = blockchain.get("subscription_policy_id", "")
         if nft and sub:
+            blockchain["nft_contract"] = nft
+            blockchain["subscription_contract"] = sub
+            config["blockchain"] = blockchain
             config["_step_result_contracts"] = {
                 "nft_policy_id": nft,
                 "subscription_policy_id": sub,
@@ -684,7 +690,9 @@ def finalize_contracts(config: dict) -> tuple[bool, Optional[str]]:
 
         if sub and nft:
             blockchain["nft_policy_id"] = nft
+            blockchain["nft_contract"] = nft               # interface convention
             blockchain["subscription_policy_id"] = sub
+            blockchain["subscription_contract"] = sub       # interface convention
             if beacon:
                 blockchain["beacon_policy_id"] = beacon
             config["blockchain"] = blockchain
@@ -735,8 +743,9 @@ def finalize_chain_config(config: dict) -> tuple[bool, Optional[str]]:
         web3_blockchain: dict = {
             "network": network,
             "nft_policy_id": nft_policy_id,
-            "nft_contract": nft_policy_id,  # interface convention
+            "nft_contract": nft_policy_id,              # interface convention
             "subscription_policy_id": sub_policy_id,
+            "subscription_contract": sub_policy_id,      # interface convention
             "server_public_key": server_pubkey,
         }
         if blockfrost_project_id:
