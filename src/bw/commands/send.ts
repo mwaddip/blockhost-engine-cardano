@@ -2,14 +2,19 @@
  * bw send <amount> <token> <from> <to>
  *
  * Send ADA or native tokens from a signing wallet to a recipient.
- * Uses Lucid Evolution for transaction building and submission.
+ * Uses the minimal tx builder (src/cardano/tx.ts) — no Lucid.
  *
  * Core function executeSend() is also used by fund-manager.
  */
 
 import type { Addressbook } from "../../fund-manager/types.js";
 import { resolveAddress, resolveToken } from "../cli-utils.js";
-import { initLucidWithWallet } from "../lucid-helpers.js";
+import { getProvider } from "../../cardano/provider.js";
+import { loadNetworkConfig } from "../../fund-manager/web3-config.js";
+import { deriveWallet } from "../../cardano/wallet.js";
+import { buildAndSubmitTransfer } from "../../cardano/tx.js";
+import type { Assets } from "../../cardano/tx.js";
+import * as fs from "fs";
 
 /**
  * Core send operation — used by both CLI and fund-manager.
@@ -29,26 +34,36 @@ export async function executeSend(
 ): Promise<void> {
   const asset = resolveToken(tokenArg);
   const toAddress = resolveAddress(toRole, book);
-  const lucid = await initLucidWithWallet(fromRole, book);
+
+  // Load sender wallet
+  const fromEntry = book[fromRole];
+  if (!fromEntry) throw new Error(`Role '${fromRole}' not found in addressbook`);
+  if (!fromEntry.keyfile) throw new Error(`Role '${fromRole}' has no keyfile — cannot sign`);
+
+  const mnemonic = fs.readFileSync(fromEntry.keyfile, "utf8").trim();
+  const { network, blockfrostProjectId } = loadNetworkConfig();
+  const wallet = await deriveWallet(mnemonic, network);
+  const provider = getProvider(network, blockfrostProjectId);
 
   const isAda = asset.policyId === "" && asset.assetName === "";
 
-  let tx;
+  let assets: Assets;
   if (isAda) {
     const lovelace = BigInt(Math.round(parseFloat(amountStr) * 1_000_000));
-    tx = lucid.newTx().pay.ToAddress(toAddress, { lovelace });
+    assets = { lovelace };
   } else {
     const unit = asset.policyId + asset.assetName;
     const amount = BigInt(amountStr);
-    tx = lucid.newTx().pay.ToAddress(toAddress, {
-      lovelace: 2_000_000n, // min UTXO for token output
-      [unit]: amount,
-    });
+    assets = { lovelace: 2_000_000n, [unit]: amount };
   }
 
-  const completed = await tx.complete();
-  const signed = await completed.sign.withWallet().complete();
-  const txHash = await signed.submit();
+  const txHash = await buildAndSubmitTransfer({
+    provider,
+    fromAddress: wallet.address,
+    toAddress,
+    assets,
+    signingKey: new Uint8Array([...wallet.paymentKey]),
+  });
   console.log(txHash);
 }
 

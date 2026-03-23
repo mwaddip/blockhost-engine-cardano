@@ -2,12 +2,7 @@
  * bw balance <role> [token]
  *
  * Query ADA and/or native token balance for an address or addressbook role.
- *
- * ADA balance: sum the `amount` array from Blockfrost /addresses/{addr},
- * filtering for unit "lovelace".
- *
- * Token balance: filter the same amount array for the specific asset unit
- * (policyId + assetName, concatenated — Blockfrost's convention).
+ * Uses CardanoProvider (Koios or Blockfrost) directly — no Lucid.
  *
  * Core function executeBalance() is used by fund-manager as well.
  */
@@ -20,7 +15,9 @@ import {
   formatAda,
   formatToken,
 } from "../cli-utils.js";
-import { initLucid } from "../lucid-helpers.js";
+import { getProvider } from "../../cardano/provider.js";
+import { loadNetworkConfig } from "../../fund-manager/web3-config.js";
+import { parseKoiosUtxos } from "../../cardano/tx.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -39,7 +36,6 @@ export interface BalanceResult {
  * @param roleOrAddr  Addressbook role or bech32 address
  * @param tokenArg    Optional: "ada", "stable", or "policyId.assetName"
  * @param book        Addressbook for role resolution
- * @param client      Pre-built Blockfrost client (allows injection in tests / fund-manager)
  */
 export async function executeBalance(
   roleOrAddr: string,
@@ -47,16 +43,20 @@ export async function executeBalance(
   book: Addressbook,
 ): Promise<BalanceResult> {
   const address = resolveAddress(roleOrAddr, book);
-  const lucid = await initLucid();
+  const { network, blockfrostProjectId } = loadNetworkConfig();
+  const provider = getProvider(network, blockfrostProjectId);
 
   // Fetch UTXOs and sum balances
   let amounts: Array<{ unit: string; quantity: string }> = [];
   try {
-    const utxos = await lucid.utxosAt(address);
+    const rawUtxos = await provider.fetchUtxos(address);
+    const utxos = parseKoiosUtxos(rawUtxos);
+
     // Aggregate all assets across UTXOs
     const totals = new Map<string, bigint>();
     for (const utxo of utxos) {
-      for (const [unit, qty] of Object.entries(utxo.assets)) {
+      totals.set("lovelace", (totals.get("lovelace") ?? 0n) + utxo.lovelace);
+      for (const [unit, qty] of Object.entries(utxo.tokens)) {
         totals.set(unit, (totals.get(unit) ?? 0n) + qty);
       }
     }
@@ -124,6 +124,3 @@ export async function balanceCommand(
 
   console.log();
 }
-
-// ── Utility ───────────────────────────────────────────────────────────────────
-
