@@ -21,7 +21,7 @@
  */
 
 import { generateMnemonic } from "bip39";
-import { deriveWallet } from "../src/cardano/wallet.js";
+import { deriveWallet } from "cmttk";
 import type { CardanoNetwork } from "../src/cardano/types.js";
 
 function resolveNetwork(name: string): CardanoNetwork {

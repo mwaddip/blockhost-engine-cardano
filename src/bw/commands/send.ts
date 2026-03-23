@@ -9,11 +9,11 @@
 
 import type { Addressbook } from "../../fund-manager/types.js";
 import { resolveAddress, resolveToken } from "../cli-utils.js";
-import { getProvider } from "../../cardano/provider.js";
+import { getProvider } from "cmttk";
 import { loadNetworkConfig } from "../../fund-manager/web3-config.js";
-import { deriveWallet } from "../../cardano/wallet.js";
-import { buildAndSubmitTransfer } from "../../cardano/tx.js";
-import type { Assets } from "../../cardano/tx.js";
+import { deriveWallet } from "cmttk";
+import { buildAndSubmitTransfer } from "cmttk";
+import type { Assets } from "cmttk";
 import * as fs from "fs";
 
 /**

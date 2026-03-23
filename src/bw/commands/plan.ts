@@ -10,10 +10,10 @@
 import type { Addressbook } from "../../fund-manager/types.js";
 import { resolveToken } from "../cli-utils.js";
 import { loadWeb3Config } from "../../fund-manager/web3-config.js";
-import { getProvider } from "../../cardano/provider.js";
-import { deriveWallet } from "../../cardano/wallet.js";
-import { Constr, Data, fromText } from "../../cardano/data.js";
-import { buildAndSubmitScriptTx } from "../../cardano/tx.js";
+import { getProvider } from "cmttk";
+import { deriveWallet } from "cmttk";
+import { Constr, Data, fromText } from "cmttk";
+import { buildAndSubmitScriptTx } from "cmttk";
 import * as fs from "fs";
 
 // ── Datum encoding ───────────────────────────────────────────────────────────

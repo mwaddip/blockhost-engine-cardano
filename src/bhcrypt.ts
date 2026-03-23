@@ -21,7 +21,7 @@ import { bytesToHex } from "@noble/hashes/utils";
 import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import { generateMnemonic, validateMnemonic } from "bip39";
-import { deriveWallet } from "./cardano/wallet.js";
+import { deriveWallet } from "cmttk";
 
 function parseArgs(args: string[]): { command: string; flags: Record<string, string> } {
   const command = args[0] ?? "";

@@ -8,13 +8,13 @@
 
 import type { Addressbook } from "../../fund-manager/types.js";
 import { loadWeb3Config } from "../../fund-manager/web3-config.js";
-import { getProvider } from "../../cardano/provider.js";
-import { deriveWallet } from "../../cardano/wallet.js";
-import { getPaymentKeyHash } from "../../cardano/address.js";
-import { Constr, Data } from "../../cardano/data.js";
-import { parseKoiosUtxos, buildAndSubmitScriptTx } from "../../cardano/tx.js";
-import type { Utxo, Assets } from "../../cardano/tx.js";
-import { hexToBytes, bytesToHex, cborArray, cborBytes, decodeCbor } from "../../cardano/cbor.js";
+import { getProvider } from "cmttk";
+import { deriveWallet } from "cmttk";
+import { getPaymentKeyHash } from "cmttk";
+import { Constr, Data } from "cmttk";
+import { parseKoiosUtxos, buildAndSubmitScriptTx } from "cmttk";
+import type { Utxo, Assets } from "cmttk";
+import { hexToBytes, bytesToHex, cborArray, cborBytes, decodeCbor } from "cmttk";
 import { referenceTokenAssetName } from "../../nft/mint.js";
 import * as fs from "fs";
 
@@ -193,7 +193,7 @@ async function setEncryptCommand(
   console.error(`Found at ${refUtxo.txHash}#${refUtxo.index}`);
 
   // Determine if this is a script address (header nibble 0x1 or 0x3 = script payment)
-  const { addressToHex } = await import("../../cardano/tx.js");
+  const { addressToHex } = await import("cmttk");
   const addrHex = addressToHex(refAddress);
   const headerByte = parseInt(addrHex.slice(0, 2), 16);
   const addrType = (headerByte >> 4) & 0x0f;

@@ -20,7 +20,7 @@ import * as fs from "node:fs";
 import type { TrackedSubscription } from "../monitor/scanner.js";
 import { eciesDecrypt, symmetricEncrypt, loadServerPrivateKey } from "../crypto.js";
 import { getCommand } from "../provisioner.js";
-import { isValidAddress } from "../cardano/address.js";
+import { isValidAddress } from "cmttk";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 

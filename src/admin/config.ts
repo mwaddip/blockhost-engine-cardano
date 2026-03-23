@@ -8,7 +8,7 @@
 import * as fs from "fs";
 import * as yaml from "js-yaml";
 import type { AdminConfig, CommandDatabase } from "./types.js";
-import { isValidAddress } from "../cardano/address.js";
+import { isValidAddress } from "cmttk";
 
 const CONFIG_DIR = process.env["BLOCKHOST_CONFIG_DIR"] ?? "/etc/blockhost";
 const BLOCKHOST_CONFIG_FILE = `${CONFIG_DIR}/blockhost.yaml`;

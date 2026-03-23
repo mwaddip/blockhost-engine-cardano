@@ -6,7 +6,7 @@
 
 import { loadAddressbook } from "../../bw/cli-utils.js";
 import { addressbookSave } from "../../root-agent/client.js";
-import { isValidAddress } from "../../cardano/address.js";
+import { isValidAddress } from "cmttk";
 import { IMMUTABLE_ROLES } from "../index.js";
 
 export async function addCommand(args: string[]): Promise<void> {

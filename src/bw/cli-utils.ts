@@ -8,7 +8,7 @@ import * as fs from "fs";
 import * as yaml from "js-yaml";
 import type { BlockFrostAPI } from "../cardano/provider.js";
 import { getBlockfrost } from "../cardano/provider.js";
-import { isValidAddress } from "../cardano/address.js";
+import { isValidAddress } from "cmttk";
 import type { AssetId } from "../cardano/types.js";
 import { loadNetworkConfig } from "../fund-manager/web3-config.js";
 import type { Addressbook, AddressbookEntry } from "../fund-manager/types.js";

@@ -21,15 +21,15 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as yaml from "js-yaml";
 import { blake2b } from "@noble/hashes/blake2b";
-import { deriveWallet } from "../src/cardano/wallet.js";
-import { getProvider } from "../src/cardano/provider.js";
-import { getPaymentKeyHash } from "../src/cardano/address.js";
-import { Constr, Data } from "../src/cardano/data.js";
-import { buildAndSubmitScriptTx } from "../src/cardano/tx.js";
-import { hexToBytes, bytesToHex } from "../src/cardano/cbor.js";
+import { deriveWallet } from "cmttk";
+import { getProvider } from "cmttk";
+import { getPaymentKeyHash } from "cmttk";
+import { Constr, Data } from "cmttk";
+import { buildAndSubmitScriptTx } from "cmttk";
+import { hexToBytes, bytesToHex } from "cmttk";
 import { userTokenAssetName, referenceTokenAssetName } from "../src/nft/mint.js";
 import type { CardanoNetwork } from "../src/cardano/types.js";
-import type { Assets } from "../src/cardano/tx.js";
+import type { Assets } from "cmttk";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 

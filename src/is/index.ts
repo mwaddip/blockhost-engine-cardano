@@ -16,7 +16,7 @@
  * Config from web3-defaults.yaml (blockfrost_project_id, network, nft_policy_id).
  */
 
-import { isValidAddress } from "../cardano/address.js";
+import { isValidAddress } from "cmttk";
 import { loadWeb3Config } from "../fund-manager/web3-config.js";
 import { getBlockfrost } from "../cardano/provider.js";
 import { findNftHolder } from "../nft/reference.js";

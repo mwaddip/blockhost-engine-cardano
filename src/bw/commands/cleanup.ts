@@ -8,11 +8,11 @@
  */
 
 import type { Addressbook } from "../../fund-manager/types.js";
-import { isValidAddress } from "../../cardano/address.js";
-import { getProvider } from "../../cardano/provider.js";
+import { isValidAddress } from "cmttk";
+import { getProvider } from "cmttk";
 import { loadNetworkConfig } from "../../fund-manager/web3-config.js";
-import { deriveWallet } from "../../cardano/wallet.js";
-import { parseKoiosUtxos, buildAndSubmitTransfer } from "../../cardano/tx.js";
+import { deriveWallet } from "cmttk";
+import { parseKoiosUtxos, buildAndSubmitTransfer } from "cmttk";
 import * as fs from "fs";
 
 export async function cleanupCommand(
