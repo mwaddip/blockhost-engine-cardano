@@ -34,20 +34,6 @@ cp "$PROJECT_DIR/package-lock.json" "$PKG_DIR/usr/share/blockhost/" 2>/dev/null 
 MODULES_SIZE=$(du -sh "$PKG_DIR/usr/share/blockhost/node_modules" | cut -f1)
 echo "  node_modules: $MODULES_SIZE"
 
-# Patch libsodium-wrappers-sumo: remove broken ESM export
-# The ESM dist is missing libsodium-sumo.mjs — force CJS fallback
-find "$PKG_DIR/usr/share/blockhost/node_modules" -path "*/libsodium-wrappers-sumo/package.json" | while read pkg; do
-    python3 -c "
-import json, sys
-p = json.load(open(sys.argv[1]))
-if 'exports' in p and '.' in p['exports']:
-    p['exports']['.'].pop('import', None)
-    p['exports']['.'].pop('module', None)
-    json.dump(p, open(sys.argv[1], 'w'), indent=2)
-    print('  Patched: ' + sys.argv[1])
-" "$pkg"
-done
-
 # ============================================
 # Copy TypeScript source
 # ============================================

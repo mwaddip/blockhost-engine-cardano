@@ -19,7 +19,7 @@
     "@noble/curves": "^1.8.0",
     "@noble/ed25519": "^3.0.0",
     "@noble/hashes": "^1.7.0",
-    "@stricahq/bip32ed25519": "^1.1.0",
+    "noble-bip32ed25519": "github:mwaddip/noble-bip32ed25519",
     "bech32": "^2.0.0",
     "bip39": "^3.1.0",
     "cbor": "^10.0.12",

@@ -7,7 +7,7 @@
  *   m/1852'/1815'/0'/2/0  — stake key
  */
 
-import { Bip32PrivateKey } from "@stricahq/bip32ed25519";
+import { Bip32PrivateKey } from "noble-bip32ed25519";
 import { mnemonicToEntropy, validateMnemonic } from "bip39";
 import { bech32 } from "bech32";
 import type { CardanoNetwork } from "./types.js";
@@ -55,7 +55,7 @@ export async function deriveWallet(
   }
 
   const entropy = mnemonicToEntropy(mnemonic);
-  const rootKey = await Bip32PrivateKey.fromEntropy(Buffer.from(entropy, "hex"));
+  const rootKey = Bip32PrivateKey.fromEntropy(Buffer.from(entropy, "hex"));
 
   // CIP-1852 derivation path: m/1852'/1815'/0'
   // Hardened derivation uses index + 0x80000000
@@ -75,8 +75,8 @@ export async function deriveWallet(
   const stakePubKey = stakePrivKey.toPublicKey();
 
   // Get key hashes (blake2b-224, computed by the library)
-  const paymentKeyHash = paymentPubKey.hash().toString("hex");
-  const stakeKeyHash = stakePubKey.hash().toString("hex");
+  const paymentKeyHash = Buffer.from(paymentPubKey.hash()).toString("hex");
+  const stakeKeyHash = Buffer.from(stakePubKey.hash()).toString("hex");
 
   // Build bech32 base address (type 0: payment key hash + stake key hash)
   const networkId = network === "mainnet" ? 1 : 0;
