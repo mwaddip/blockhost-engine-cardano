@@ -29,7 +29,7 @@ echo ""
 echo "Installing production dependencies..."
 cp "$PROJECT_DIR/package.json" "$PKG_DIR/usr/share/blockhost/"
 cp "$PROJECT_DIR/package-lock.json" "$PKG_DIR/usr/share/blockhost/" 2>/dev/null || true
-(cd "$PKG_DIR/usr/share/blockhost" && npm install --production --ignore-scripts --no-optional --silent)
+(cd "$PKG_DIR/usr/share/blockhost" && npm install --production --ignore-scripts --silent)
 
 MODULES_SIZE=$(du -sh "$PKG_DIR/usr/share/blockhost/node_modules" | cut -f1)
 echo "  node_modules: $MODULES_SIZE"
