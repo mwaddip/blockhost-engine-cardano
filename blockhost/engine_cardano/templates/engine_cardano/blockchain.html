@@ -228,25 +228,6 @@
             </div>
         </div>
 
-        <!-- Admin Wallet -->
-        <div class="form-section">
-            <h3>Admin Wallet</h3>
-            <p class="text-muted mb-2" style="font-size: 0.875rem;">
-                Optional: enter an existing Cardano wallet address to use as the admin.
-                If left blank, the deployer wallet will also be the admin.
-            </p>
-            <div class="form-group">
-                <label for="admin_wallet">Admin Wallet Address (bech32)</label>
-                <input type="text" id="admin_wallet" name="admin_wallet"
-                       value="{{ blockchain.get('admin_wallet', '') }}"
-                       placeholder="addr1... or addr_test1..."
-                       style="font-family: monospace;">
-                <p class="text-muted mt-1" style="font-size: 0.75rem;">
-                    Mainnet addresses start with <code>addr1</code>; testnet addresses start with <code>addr_test1</code>.
-                </p>
-            </div>
-        </div>
-
         <!-- Subscription Plan -->
         <div class="form-section">
             <h3>Subscription Plan</h3>
@@ -530,16 +511,6 @@ document.getElementById('blockchain-form').addEventListener('submit', function(e
         }
     }
 
-    // Validate admin wallet if provided
-    var adminWallet = document.getElementById('admin_wallet').value.trim();
-    if (adminWallet) {
-        var addrRe = /^(addr1[a-z0-9]{53,}|addr_test1[a-z0-9]{53,})$/;
-        if (!addrRe.test(adminWallet)) {
-            e.preventDefault();
-            alert('Invalid admin wallet address. Cardano addresses start with addr1 (mainnet) or addr_test1 (testnet).');
-            return;
-        }
-    }
 });
 
 // ---- Koios URL helper ----
