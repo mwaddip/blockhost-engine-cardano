@@ -35,7 +35,7 @@ ESBUILD_COMMON=(
     --platform=node
     --target=node22
     --minify
-    --alias:libsodium-wrappers-sumo=./src/shims/libsodium-wrappers-sumo.ts
+    --alias:libsodium-wrappers-sumo=noble-bip32ed25519/sodium
 )
 
 # Bundle the monitor
