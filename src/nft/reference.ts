@@ -5,7 +5,7 @@
  * via Blockfrost asset address queries.
  */
 
-import type { BlockFrostAPI } from "@blockfrost/blockfrost-js";
+import type { BlockFrostAPI } from "../cardano/provider.js";
 import type { NftReferenceDatum } from "../cardano/types.js";
 import { referenceTokenAssetName, userTokenAssetName } from "./mint.js";
 

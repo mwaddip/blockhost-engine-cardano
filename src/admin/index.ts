@@ -19,7 +19,7 @@
 
 import { hmac } from "@noble/hashes/hmac";
 import { sha256 } from "@noble/hashes/sha2";
-import type { BlockFrostAPI } from "@blockfrost/blockfrost-js";
+import type { BlockFrostAPI } from "../cardano/provider.js";
 import type {
   AdminCommand,
   AdminConfig,

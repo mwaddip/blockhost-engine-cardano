@@ -15,7 +15,7 @@
  * attention).
  */
 
-import type { BlockFrostAPI } from "@blockfrost/blockfrost-js";
+import type { BlockFrostAPI } from "../cardano/provider.js";
 import { spawnSync } from "child_process";
 import { findNftHolder } from "../nft/reference.js";
 import { getCommand } from "../provisioner.js";

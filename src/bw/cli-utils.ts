@@ -6,7 +6,7 @@
 
 import * as fs from "fs";
 import * as yaml from "js-yaml";
-import type { BlockFrostAPI } from "@blockfrost/blockfrost-js";
+import type { BlockFrostAPI } from "../cardano/provider.js";
 import { getBlockfrost } from "../cardano/provider.js";
 import { isValidAddress } from "../cardano/address.js";
 import type { AssetId } from "../cardano/types.js";

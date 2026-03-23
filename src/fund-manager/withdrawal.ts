@@ -18,7 +18,7 @@
  *   5. Submit each batch tx to Blockfrost
  */
 
-import type { BlockFrostAPI } from "@blockfrost/blockfrost-js";
+import type { BlockFrostAPI } from "../cardano/provider.js";
 import type { Addressbook, FundManagerConfig } from "./types.js";
 import { resolveRole } from "./addressbook.js";
 import { formatAda } from "../bw/cli-utils.js";

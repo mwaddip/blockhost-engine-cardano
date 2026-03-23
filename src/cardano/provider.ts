@@ -3,9 +3,10 @@
  *
  * Default: Koios (free, no API key required).
  * Optional: Blockfrost (higher rate limits, requires project ID).
+ *
+ * Both providers use native fetch() — no external SDK dependencies.
  */
 
-import { BlockFrostAPI } from "@blockfrost/blockfrost-js";
 import type { CardanoNetwork } from "./types.js";
 
 // ── Provider interface ──────────────────────────────────────────────────────
@@ -45,17 +46,11 @@ export interface CardanoProvider {
 
 /** Subset of protocol parameters needed for tx building. */
 export interface ProtocolParams {
-  /** Fee per byte (minFeeA / txFeePerByte), lovelace */
   minFeeA: number;
-  /** Fixed fee component (minFeeB / txFeeFixed), lovelace */
   minFeeB: number;
-  /** Coins per UTXO byte (for min UTXO calculation) */
   coinsPerUtxoByte: number;
-  /** PlutusV3 cost model (array of integers) — needed for script_data_hash */
   costModelV3?: number[];
-  /** Price per memory unit (lovelace, decimal) — for script fee calculation */
   priceMem: number;
-  /** Price per CPU step (lovelace, decimal) — for script fee calculation */
   priceStep: number;
 }
 
@@ -71,9 +66,7 @@ class KoiosProvider implements CardanoProvider {
   readonly name = "koios";
   private baseUrl: string;
 
-  /** Max retries on 429 / 5xx before giving up */
   private static MAX_RETRIES = 4;
-  /** Base delay in ms — doubles on each retry (1s, 2s, 4s, 8s) */
   private static BASE_DELAY_MS = 1000;
 
   constructor(network: CardanoNetwork) {
@@ -93,45 +86,32 @@ class KoiosProvider implements CardanoProvider {
         },
       });
 
-      if (res.ok) {
-        return res.json();
-      }
-
+      if (res.ok) return res.json();
       if (res.status === 404) return null;
 
-      // Rate limited or server error — retry with exponential backoff
       if (res.status === 429 || res.status >= 500) {
         if (attempt < KoiosProvider.MAX_RETRIES) {
-          // Respect Retry-After header if present, otherwise exponential backoff
           const retryAfter = res.headers.get("Retry-After");
           const delay = retryAfter
             ? parseInt(retryAfter, 10) * 1000
             : KoiosProvider.BASE_DELAY_MS * Math.pow(2, attempt);
-          console.warn(
-            `[KOIOS] ${res.status} on ${path}, retrying in ${delay}ms (attempt ${attempt + 1}/${KoiosProvider.MAX_RETRIES})`,
-          );
+          console.warn(`[KOIOS] ${res.status} on ${path}, retrying in ${delay}ms (${attempt + 1}/${KoiosProvider.MAX_RETRIES})`);
           await new Promise((r) => setTimeout(r, delay));
           continue;
         }
       }
 
-      // Non-retryable error or retries exhausted
       throw new Error(`Koios ${res.status}: ${await res.text()}`);
     }
 
-    // Should not reach here, but satisfy TypeScript
     throw new Error(`Koios: retries exhausted for ${path}`);
   }
 
   private async post(path: string, body: unknown): Promise<unknown> {
-    return this.request(path, {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
+    return this.request(path, { method: "POST", body: JSON.stringify(body) });
   }
 
   async fetchUtxos(address: string, asset?: string): Promise<unknown[]> {
-    // Koios uses POST for address UTXOs
     const result = await this.post("/address_utxos", {
       _addresses: [address],
       _extended: true,
@@ -140,15 +120,12 @@ class KoiosProvider implements CardanoProvider {
     if (!result) return [];
 
     if (asset) {
-      // Filter for UTXOs containing the specific asset
       return (result as Array<Record<string, unknown>>).filter((utxo) => {
         const assetList = utxo["asset_list"] as Array<Record<string, string>> | undefined;
         if (!assetList) return false;
         const policyId = asset.slice(0, 56);
         const assetName = asset.slice(56);
-        return assetList.some(
-          (a) => a["policy_id"] === policyId && a["asset_name"] === assetName,
-        );
+        return assetList.some((a) => a["policy_id"] === policyId && a["asset_name"] === assetName);
       });
     }
 
@@ -167,7 +144,6 @@ class KoiosProvider implements CardanoProvider {
   }
 
   async submitTx(txCbor: string): Promise<string> {
-    // Koios expects the raw CBOR bytes as the request body
     const url = `${this.baseUrl}/submittx`;
     const cborBytes = Buffer.from(txCbor, "hex");
     const res = await fetch(url, {
@@ -175,17 +151,13 @@ class KoiosProvider implements CardanoProvider {
       headers: { "Content-Type": "application/cbor" },
       body: cborBytes,
     });
-    if (!res.ok) {
-      throw new Error(`Koios submit failed ${res.status}: ${await res.text()}`);
-    }
+    if (!res.ok) throw new Error(`Koios submit failed ${res.status}: ${await res.text()}`);
     const txHash = await res.text();
     return txHash.replace(/"/g, "").trim();
   }
 
   async fetchTxMetadata(txHash: string): Promise<unknown[]> {
-    const result = await this.post("/tx_metadata", {
-      _tx_hashes: [txHash],
-    }) as unknown[] | null;
+    const result = await this.post("/tx_metadata", { _tx_hashes: [txHash] }) as unknown[] | null;
     return result ?? [];
   }
 
@@ -199,8 +171,6 @@ class KoiosProvider implements CardanoProvider {
     }) as unknown[] | null;
 
     if (!result) return [];
-
-    // Koios returns all txs; apply count limit client-side
     const sorted = options?.order === "asc" ? result : result.reverse();
     return options?.count ? sorted.slice(0, options.count) : sorted;
   }
@@ -243,116 +213,120 @@ class KoiosProvider implements CardanoProvider {
   }
 }
 
-// ── Blockfrost provider (wraps @blockfrost/blockfrost-js) ───────────────────
+// ── Blockfrost provider (native fetch) ──────────────────────────────────────
+
+const BLOCKFROST_URLS: Record<CardanoNetwork, string> = {
+  mainnet: "https://cardano-mainnet.blockfrost.io/api/v0",
+  preprod: "https://cardano-preprod.blockfrost.io/api/v0",
+  preview: "https://cardano-preview.blockfrost.io/api/v0",
+};
 
 class BlockfrostProvider implements CardanoProvider {
   readonly name = "blockfrost";
-  private client: BlockFrostAPI;
+  private baseUrl: string;
+  private projectId: string;
 
   constructor(projectId: string, network: CardanoNetwork) {
-    const baseUrl =
-      network === "mainnet"
-        ? "https://cardano-mainnet.blockfrost.io/api"
-        : network === "preprod"
-          ? "https://cardano-preprod.blockfrost.io/api"
-          : "https://cardano-preview.blockfrost.io/api";
+    this.baseUrl = BLOCKFROST_URLS[network];
+    this.projectId = projectId;
+  }
 
-    this.client = new BlockFrostAPI({ projectId, customBackend: baseUrl });
+  private async request(path: string, options?: RequestInit): Promise<unknown> {
+    const res = await fetch(`${this.baseUrl}${path}`, {
+      ...options,
+      headers: {
+        "project_id": this.projectId,
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
+    });
+
+    if (res.ok) return res.json();
+    if (res.status === 404) return null;
+    throw new Error(`Blockfrost ${res.status}: ${await res.text()}`);
   }
 
   async fetchUtxos(address: string, asset?: string): Promise<unknown[]> {
-    try {
-      if (asset) {
-        return await this.client.addressesUtxosAssetAll(address, asset);
-      }
-      return await this.client.addressesUtxosAll(address);
-    } catch (err: unknown) {
-      if (this.is404(err)) return [];
-      throw err;
+    const path = asset
+      ? `/addresses/${address}/utxos/${asset}`
+      : `/addresses/${address}/utxos`;
+
+    // Blockfrost paginates — fetch all pages
+    const all: unknown[] = [];
+    let page = 1;
+    while (true) {
+      const result = await this.request(`${path}?page=${page}&order=asc`) as unknown[] | null;
+      if (!result || result.length === 0) break;
+      all.push(...result);
+      if (result.length < 100) break; // less than a full page = last page
+      page++;
     }
+    return all;
   }
 
   async fetchTip(): Promise<{ slot: number; block: number; time: number }> {
-    const tip = await this.client.blocksLatest();
+    const tip = await this.request("/blocks/latest") as Record<string, unknown> | null;
+    if (!tip) throw new Error("Failed to fetch tip from Blockfrost");
     return {
-      slot: tip.slot ?? 0,
-      block: tip.height ?? 0,
-      time: tip.time,
+      slot: Number(tip["slot"] ?? 0),
+      block: Number(tip["height"] ?? 0),
+      time: Number(tip["time"] ?? 0),
     };
   }
 
   async submitTx(txCbor: string): Promise<string> {
-    return await this.client.txSubmit(txCbor);
+    const res = await fetch(`${this.baseUrl}/tx/submit`, {
+      method: "POST",
+      headers: {
+        "project_id": this.projectId,
+        "Content-Type": "application/cbor",
+      },
+      body: Buffer.from(txCbor, "hex"),
+    });
+    if (!res.ok) throw new Error(`Blockfrost submit ${res.status}: ${await res.text()}`);
+    const txHash = await res.text();
+    return txHash.replace(/"/g, "").trim();
   }
 
   async fetchTxMetadata(txHash: string): Promise<unknown[]> {
-    try {
-      return await this.client.txsMetadata(txHash);
-    } catch (err: unknown) {
-      if (this.is404(err)) return [];
-      throw err;
-    }
+    const result = await this.request(`/txs/${txHash}/metadata`) as unknown[] | null;
+    return result ?? [];
   }
 
   async fetchAddressTransactions(
     address: string,
     options?: { count?: number; order?: "asc" | "desc" },
   ): Promise<unknown[]> {
-    try {
-      return await this.client.addressesTransactions(address, {
-        count: options?.count,
-        order: options?.order,
-      });
-    } catch (err: unknown) {
-      if (this.is404(err)) return [];
-      throw err;
-    }
+    const count = options?.count ?? 100;
+    const order = options?.order ?? "desc";
+    const result = await this.request(`/addresses/${address}/transactions?count=${count}&order=${order}`) as unknown[] | null;
+    return result ?? [];
   }
 
   async fetchAssetAddresses(asset: string): Promise<Array<{ address: string; quantity: string }>> {
-    try {
-      const result = await this.client.assetsAddresses(asset);
-      return result.map((r) => ({ address: r.address, quantity: r.quantity }));
-    } catch (err: unknown) {
-      if (this.is404(err)) return [];
-      throw err;
-    }
+    const result = await this.request(`/assets/${asset}/addresses`) as Array<Record<string, string>> | null;
+    if (!result) return [];
+    return result.map((r) => ({ address: r["address"] ?? "", quantity: r["quantity"] ?? "0" }));
   }
 
   async fetchAddressInfo(address: string): Promise<unknown> {
-    try {
-      return await this.client.addresses(address);
-    } catch (err: unknown) {
-      if (this.is404(err)) return null;
-      throw err;
-    }
+    return this.request(`/addresses/${address}`);
   }
 
   async fetchProtocolParams(): Promise<ProtocolParams> {
-    const p = await this.client.epochsLatestParameters();
-    // Blockfrost cost_models needs a separate call
+    const p = await this.request("/epochs/latest/parameters") as Record<string, unknown> | null;
+    if (!p) throw new Error("Failed to fetch protocol params from Blockfrost");
+    const costModels = p["cost_models"] as Record<string, unknown> | undefined;
     let costModelV3: number[] | undefined;
-    try {
-      const cm = p.cost_models as Record<string, unknown> | null;
-      if (cm?.["PlutusV3"]) costModelV3 = cm["PlutusV3"] as number[];
-    } catch { /* not available */ }
+    if (costModels?.["PlutusV3"]) costModelV3 = costModels["PlutusV3"] as number[];
     return {
-      minFeeA: p.min_fee_a,
-      minFeeB: p.min_fee_b,
-      coinsPerUtxoByte: Number(p.coins_per_utxo_size ?? "4310"),
+      minFeeA: Number(p["min_fee_a"] ?? 44),
+      minFeeB: Number(p["min_fee_b"] ?? 155381),
+      coinsPerUtxoByte: Number(p["coins_per_utxo_size"] ?? "4310"),
       costModelV3,
-      priceMem: Number(p.price_mem ?? "0.0577"),
-      priceStep: Number(p.price_step ?? "0.0000721"),
+      priceMem: Number(p["price_mem"] ?? "0.0577"),
+      priceStep: Number(p["price_step"] ?? "0.0000721"),
     };
-  }
-
-  private is404(err: unknown): boolean {
-    return (
-      !!err &&
-      typeof err === "object" &&
-      "status_code" in err &&
-      (err as { status_code: number }).status_code === 404
-    );
   }
 }
 
@@ -387,11 +361,111 @@ export function resetProvider(): void {
   _provider = null;
 }
 
-// ── Legacy convenience exports (used by existing code) ──────────────────────
+// ── Legacy compatibility layer ──────────────────────────────────────────────
+//
+// The monitor, fund-manager, admin, reconciler, and is CLI still pass
+// BlockFrostAPI objects around. These shims satisfy that interface using
+// native fetch so the SDK can be removed.
+
+/**
+ * Lightweight Blockfrost REST client matching the subset of BlockFrostAPI
+ * methods used across the codebase. Backed by native fetch().
+ */
+export class BlockFrostAPI {
+  private baseUrl: string;
+  private projectId: string;
+
+  constructor(opts: { projectId: string; customBackend?: string }) {
+    this.projectId = opts.projectId;
+    // Auto-detect network from project ID prefix
+    if (opts.customBackend) {
+      this.baseUrl = opts.customBackend;
+    } else if (opts.projectId.startsWith("mainnet")) {
+      this.baseUrl = "https://cardano-mainnet.blockfrost.io/api";
+    } else if (opts.projectId.startsWith("preview")) {
+      this.baseUrl = "https://cardano-preview.blockfrost.io/api";
+    } else {
+      this.baseUrl = "https://cardano-preprod.blockfrost.io/api";
+    }
+  }
+
+  private async get(path: string): Promise<unknown> {
+    const res = await fetch(`${this.baseUrl}${path}`, {
+      headers: { "project_id": this.projectId },
+    });
+    if (res.status === 404) throw Object.assign(new Error("Not found"), { status_code: 404 });
+    if (!res.ok) throw new Error(`Blockfrost ${res.status}: ${await res.text()}`);
+    return res.json();
+  }
+
+  private async getAll(path: string): Promise<unknown[]> {
+    const all: unknown[] = [];
+    let page = 1;
+    while (true) {
+      const sep = path.includes("?") ? "&" : "?";
+      const result = await this.get(`${path}${sep}page=${page}&order=asc`) as unknown[];
+      all.push(...result);
+      if (result.length < 100) break;
+      page++;
+    }
+    return all;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async addressesUtxos(address: string): Promise<any[]> {
+    return this.get(`/addresses/${address}/utxos`) as Promise<any[]>;
+  }
+
+  async addressesUtxosAll(address: string): Promise<unknown[]> {
+    return this.getAll(`/addresses/${address}/utxos`);
+  }
+
+  async addressesUtxosAssetAll(address: string, asset: string): Promise<unknown[]> {
+    return this.getAll(`/addresses/${address}/utxos/${asset}`);
+  }
+
+  async blocksLatest(): Promise<Record<string, unknown>> {
+    return this.get("/blocks/latest") as Promise<Record<string, unknown>>;
+  }
+
+  async txSubmit(txCbor: string): Promise<string> {
+    const res = await fetch(`${this.baseUrl}/tx/submit`, {
+      method: "POST",
+      headers: { "project_id": this.projectId, "Content-Type": "application/cbor" },
+      body: Buffer.from(txCbor, "hex"),
+    });
+    if (!res.ok) throw new Error(`Blockfrost submit ${res.status}: ${await res.text()}`);
+    return (await res.text()).replace(/"/g, "").trim();
+  }
+
+  async txsMetadata(txHash: string): Promise<unknown[]> {
+    return this.get(`/txs/${txHash}/metadata`) as Promise<unknown[]>;
+  }
+
+  async addressesTransactions(
+    address: string,
+    opts?: { count?: number; order?: string },
+  ): Promise<unknown[]> {
+    const count = opts?.count ?? 100;
+    const order = opts?.order ?? "desc";
+    return this.get(`/addresses/${address}/transactions?count=${count}&order=${order}`) as Promise<unknown[]>;
+  }
+
+  async assetsAddresses(asset: string): Promise<Array<{ address: string; quantity: string }>> {
+    return this.get(`/assets/${asset}/addresses`) as Promise<Array<{ address: string; quantity: string }>>;
+  }
+
+  async addresses(address: string): Promise<unknown> {
+    return this.get(`/addresses/${address}`);
+  }
+
+  async epochsLatestParameters(): Promise<Record<string, unknown>> {
+    return this.get("/epochs/latest/parameters") as Promise<Record<string, unknown>>;
+  }
+}
 
 /** @deprecated Use getProvider() instead */
 export function getBlockfrost(projectId: string, _network: CardanoNetwork): BlockFrostAPI {
-  // The SDK auto-detects network from the project ID prefix (preprod/preview/mainnet)
   return new BlockFrostAPI({ projectId });
 }
 
@@ -402,36 +476,21 @@ export async function queryUtxos(
   asset?: string,
 ): Promise<unknown[]> {
   try {
-    if (asset) {
-      return await client.addressesUtxosAssetAll(address, asset);
-    }
+    if (asset) return await client.addressesUtxosAssetAll(address, asset);
     return await client.addressesUtxosAll(address);
   } catch (err: unknown) {
-    if (
-      err &&
-      typeof err === "object" &&
-      "status_code" in err &&
-      (err as { status_code: number }).status_code === 404
-    ) {
-      return [];
-    }
+    if (err && typeof err === "object" && "status_code" in err && (err as { status_code: number }).status_code === 404) return [];
     throw err;
   }
 }
 
 /** @deprecated Use provider.fetchTip() instead */
-export async function getTip(
-  client: BlockFrostAPI,
-): Promise<{ slot: number; block: number; time: number }> {
+export async function getTip(client: BlockFrostAPI): Promise<{ slot: number; block: number; time: number }> {
   const tip = await client.blocksLatest();
-  return {
-    slot: tip.slot ?? 0,
-    block: tip.height ?? 0,
-    time: tip.time,
-  };
+  return { slot: Number(tip["slot"] ?? 0), block: Number(tip["height"] ?? 0), time: Number(tip["time"] ?? 0) };
 }
 
 /** @deprecated Use provider.submitTx() instead */
 export async function submitTx(client: BlockFrostAPI, txCbor: string): Promise<string> {
-  return await client.txSubmit(txCbor);
+  return client.txSubmit(txCbor);
 }

@@ -6,7 +6,7 @@
  * their inline datums, and returns a diff against the previously known state.
  */
 
-import { BlockFrostAPI } from "@blockfrost/blockfrost-js";
+import { BlockFrostAPI } from "../cardano/provider.js";
 import type { SubscriptionDatum } from "../cardano/types.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────

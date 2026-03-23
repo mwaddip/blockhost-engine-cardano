@@ -8,7 +8,7 @@
  * Handles graceful shutdown on SIGINT/SIGTERM.
  */
 
-import { BlockFrostAPI } from "@blockfrost/blockfrost-js";
+import { BlockFrostAPI } from "../cardano/provider.js";
 import { loadWeb3Config } from "../fund-manager/web3-config.js";
 import { getBlockfrost } from "../cardano/provider.js";
 import { scanBeacons, type ScanDiff } from "./scanner.js";
