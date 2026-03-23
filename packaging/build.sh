@@ -140,28 +140,22 @@ else
     echo "WARNING: Failed to bundle keygen.js"
 fi
 
+# Bundle deploy-contracts
+npx esbuild "$PROJECT_DIR/scripts/deploy-contracts.ts" \
+    "${ESBUILD_COMMON[@]}" \
+    --outfile="$PKG_DIR/usr/share/blockhost/deploy-contracts.js"
+
+if [ -f "$PKG_DIR/usr/share/blockhost/deploy-contracts.js" ]; then
+    echo "  deploy-contracts.js ($(du -h "$PKG_DIR/usr/share/blockhost/deploy-contracts.js" | cut -f1))"
+    cat > "$PKG_DIR/usr/bin/blockhost-deploy-contracts" << 'EOF'
+#!/bin/sh
+exec node /usr/share/blockhost/deploy-contracts.js "$@"
+EOF
+else
+    echo "WARNING: Failed to bundle deploy-contracts"
+fi
+
 chmod 755 "$PKG_DIR/usr/bin/"*
-
-# ============================================
-# Copy WASM files required by Lucid (CML)
-# ============================================
-echo ""
-echo "Copying WASM dependencies..."
-
-WASM_FILES=(
-    "node_modules/@anastasia-labs/cardano-multiplatform-lib-nodejs/cardano_multiplatform_lib_bg.wasm"
-    "node_modules/@lucid-evolution/uplc/dist/node/uplc_tx_bg.wasm"
-    "node_modules/@emurgo/cardano-message-signing-nodejs/cardano_message_signing_bg.wasm"
-)
-for wasm in "${WASM_FILES[@]}"; do
-    SRC="$PROJECT_DIR/$wasm"
-    if [ -f "$SRC" ]; then
-        cp "$SRC" "$PKG_DIR/usr/share/blockhost/"
-        echo "  $(basename "$SRC") ($(du -h "$SRC" | cut -f1))"
-    else
-        echo "  WARNING: Not found: $(basename "$wasm")"
-    fi
-done
 
 # ============================================
 # Copy Aiken contract artifacts (plutus.json)
@@ -267,7 +261,6 @@ chmod 755 "$PKG_DIR/DEBIAN/postinst" "$PKG_DIR/DEBIAN/prerm" "$PKG_DIR/DEBIAN/po
 echo "Copying files..."
 
 # Bin scripts
-cp "$PROJECT_DIR/scripts/deploy-contracts" "$PKG_DIR/usr/bin/blockhost-deploy-contracts"
 cp "$PROJECT_DIR/scripts/generate-signup-page" "$PKG_DIR/usr/bin/blockhost-generate-signup"
 chmod 755 "$PKG_DIR/usr/bin/"*
 
