@@ -735,6 +735,7 @@ def finalize_chain_config(config: dict) -> tuple[bool, Optional[str]]:
         web3_blockchain: dict = {
             "network": network,
             "nft_policy_id": nft_policy_id,
+            "nft_contract": nft_policy_id,  # interface convention
             "subscription_policy_id": sub_policy_id,
             "server_public_key": server_pubkey,
         }
