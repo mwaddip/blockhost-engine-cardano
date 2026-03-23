@@ -27,7 +27,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENGINE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CONFIG_DIR="${BLOCKHOST_CONFIG_DIR:-/etc/blockhost}"
 
-BLUEPRINT="${BLUEPRINT_PATH:-$ENGINE_DIR/plutus.json}"
+# Resolve plutus.json: env override > project root > installed package location
+if [ -n "${BLUEPRINT_PATH:-}" ]; then
+    BLUEPRINT="$BLUEPRINT_PATH"
+elif [ -f "$ENGINE_DIR/plutus.json" ]; then
+    BLUEPRINT="$ENGINE_DIR/plutus.json"
+elif [ -f "/usr/share/blockhost/contracts/plutus.json" ]; then
+    BLUEPRINT="/usr/share/blockhost/contracts/plutus.json"
+else
+    BLUEPRINT="$ENGINE_DIR/plutus.json" # will fail with a clear error below
+fi
 MODE="${1:-all}"
 
 # ── Validate mode ─────────────────────────────────────────────────────────────
