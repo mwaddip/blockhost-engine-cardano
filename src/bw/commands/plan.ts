@@ -4,18 +4,17 @@
  * Create a plan reference UTXO with an inline PlanDatum at the server's own
  * address (or a known plan registry address).
  *
- * The PlanDatum fields match the Aiken type:
- *   plan_id: Int, name: ByteArray, price_per_day: Int,
- *   accepted_payment_assets: List<AssetId>, active: Bool
- *
- * Uses Lucid Evolution for transaction building and submission.
+ * Uses the minimal tx toolkit (src/cardano/) — no Lucid.
  */
 
-import { Constr, Data, fromText } from "@lucid-evolution/lucid";
 import type { Addressbook } from "../../fund-manager/types.js";
 import { resolveToken } from "../cli-utils.js";
-import { initLucidWithWallet } from "../lucid-helpers.js";
 import { loadWeb3Config } from "../../fund-manager/web3-config.js";
+import { getProvider } from "../../cardano/provider.js";
+import { deriveWallet } from "../../cardano/wallet.js";
+import { Constr, Data, fromText } from "../../cardano/data.js";
+import { buildAndSubmitScriptTx } from "../../cardano/tx.js";
+import * as fs from "fs";
 
 // ── Datum encoding ───────────────────────────────────────────────────────────
 
@@ -58,9 +57,6 @@ let nextPlanId = 1;
 
 // ── CLI handler ──────────────────────────────────────────────────────────────
 
-/**
- * CLI handler
- */
 export async function planCommand(
   args: string[],
   book: Addressbook,
@@ -93,7 +89,7 @@ async function planCreateCommand(
         process.exit(1);
       }
       intervalSlots = parseInt(val, 10);
-      i++; // skip next
+      i++;
     } else {
       const arg = args[i];
       if (arg !== undefined) {
@@ -120,9 +116,7 @@ async function planCreateCommand(
   let acceptedAssets: Array<{ policyId: string; assetName: string }> = [];
   try {
     const web3 = loadWeb3Config();
-    // Default: accept ADA
     acceptedAssets.push({ policyId: "", assetName: "" });
-    // If a payment token is configured, also accept it
     try {
       const stable = resolveToken("stable");
       if (stable.policyId !== "") {
@@ -131,52 +125,44 @@ async function planCreateCommand(
     } catch {
       // no stable token configured — ADA only
     }
-    void web3; // used for config validation
+    void web3;
   } catch {
-    // No web3 config — default to ADA only
     acceptedAssets = [{ policyId: "", assetName: "" }];
   }
 
-  // Determine signing role — prefer "server"
+  // Determine signing role
   const signingRole =
     book["server"]?.keyfile
       ? "server"
       : Object.entries(book).find(([, e]) => e.keyfile)?.[0];
-  if (!signingRole) {
-    throw new Error("No signing wallet available in addressbook");
-  }
+  if (!signingRole) throw new Error("No signing wallet available in addressbook");
 
-  const lucid = await initLucidWithWallet(signingRole, book);
-  const ownAddr = await lucid.wallet().address();
+  const signerEntry = book[signingRole]!;
+  const mnemonic = fs.readFileSync(signerEntry.keyfile!, "utf8").trim();
+  const { network, blockfrostProjectId } = loadWeb3Config();
+  const wallet = await deriveWallet(mnemonic, network);
+  const provider = getProvider(network, blockfrostProjectId);
 
-  // Auto-increment plan ID (simple strategy: use timestamp-based ID)
+  // Auto-increment plan ID
   const planId = nextPlanId++;
 
   // Encode the datum
-  const datumCbor = encodePlanDatum(
-    planId,
-    name,
-    pricePerDay,
-    acceptedAssets,
-    true, // active
-  );
+  const datumCbor = encodePlanDatum(planId, name, pricePerDay, acceptedAssets, true);
 
   // Create the plan reference UTXO at the server's own address
-  // The UTXO just needs enough ADA to carry the datum
-  const tx = lucid
-    .newTx()
-    .pay.ToAddressWithData(
-      ownAddr,
-      { kind: "inline", value: datumCbor },
-      { lovelace: 2_000_000n },
-    );
+  const txHash = await buildAndSubmitScriptTx({
+    provider,
+    walletAddress: wallet.address,
+    scriptInputs: [],
+    outputs: [{
+      address: wallet.address,
+      assets: { lovelace: 2_000_000n },
+      datumCbor,
+    }],
+    signingKey: new Uint8Array([...wallet.paymentKey]),
+  });
 
-  const completed = await tx.complete();
-  const signed = await completed.sign.withWallet().complete();
-  const txHash = await signed.submit();
   console.log(txHash);
-  const intervalInfo = intervalSlots
-    ? `, interval=${intervalSlots} slots`
-    : "";
+  const intervalInfo = intervalSlots ? `, interval=${intervalSlots} slots` : "";
   console.error(`Plan "${name}" created: id=${planId}, price=${pricePerDay.toString()}/day${intervalInfo}`);
 }

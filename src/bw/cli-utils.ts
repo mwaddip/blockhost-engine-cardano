@@ -131,9 +131,6 @@ function resolveStableToken(): AssetId {
  *
  * Throws if the role has no keyfile or if the mnemonic is invalid.
  */
-// Wallet loading now uses Lucid Evolution's fromSeed() via lucid-helpers.ts.
-// See initLucidWithWallet() for the replacement.
-
 // ── Blockfrost client ─────────────────────────────────────────────────────────
 
 /**
