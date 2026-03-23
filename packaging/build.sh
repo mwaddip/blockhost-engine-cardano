@@ -4,7 +4,6 @@ set -e
 
 VERSION="0.1.0"
 PKG_NAME="blockhost-engine-cardano_${VERSION}_all"
-# Auth-svc template package removed — now maintained by libpam-web3 plugin
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 PKG_DIR="$SCRIPT_DIR/$PKG_NAME"
@@ -14,7 +13,6 @@ echo "Building blockhost-engine-cardano v${VERSION}..."
 # Clean up build artifacts on exit (success or failure)
 cleanup() {
   rm -rf "$PKG_DIR"
-  # auth-svc cleanup removed — package now maintained by libpam-web3 plugin
 }
 trap cleanup EXIT
 
@@ -23,61 +21,126 @@ rm -rf "$PKG_DIR"
 mkdir -p "$PKG_DIR"/{DEBIAN,usr/bin,usr/share/blockhost/contracts,lib/systemd/system}
 
 # ============================================
-# Install production dependencies
+# Bundle TypeScript with esbuild
 # ============================================
 echo ""
-echo "Installing production dependencies..."
-cp "$PROJECT_DIR/package.json" "$PKG_DIR/usr/share/blockhost/"
-cp "$PROJECT_DIR/package-lock.json" "$PKG_DIR/usr/share/blockhost/" 2>/dev/null || true
-(cd "$PKG_DIR/usr/share/blockhost" && npm install --production --ignore-scripts --silent)
+echo "Bundling TypeScript with esbuild..."
 
-MODULES_SIZE=$(du -sh "$PKG_DIR/usr/share/blockhost/node_modules" | cut -f1)
-echo "  node_modules: $MODULES_SIZE"
+# Install dependencies first (needed for bundling)
+(cd "$PROJECT_DIR" && npm install --silent)
 
-# ============================================
-# Copy TypeScript source
-# ============================================
-echo ""
-echo "Copying TypeScript source..."
-cp -r "$PROJECT_DIR/src" "$PKG_DIR/usr/share/blockhost/src"
-cp "$PROJECT_DIR/tsconfig.json" "$PKG_DIR/usr/share/blockhost/"
+# Common esbuild flags
+ESBUILD_COMMON=(
+    --bundle
+    --platform=node
+    --target=node22
+    --minify
+    --alias:libsodium-wrappers-sumo=./src/shims/libsodium-wrappers-sumo.ts
+)
 
-# Scripts (keygen, mint_nft)
-mkdir -p "$PKG_DIR/usr/share/blockhost/scripts"
-cp "$PROJECT_DIR/scripts/keygen.ts" "$PKG_DIR/usr/share/blockhost/scripts/"
-cp "$PROJECT_DIR/scripts/mint_nft.ts" "$PKG_DIR/usr/share/blockhost/scripts/"
+# Bundle the monitor
+npx esbuild "$PROJECT_DIR/src/monitor/index.ts" \
+    "${ESBUILD_COMMON[@]}" \
+    --outfile="$PKG_DIR/usr/share/blockhost/monitor.js"
 
-# ============================================
-# Create CLI wrapper scripts
-# ============================================
-echo ""
-echo "Creating CLI wrappers..."
-TSX=/usr/share/blockhost/node_modules/.bin/tsx
+if [ ! -f "$PKG_DIR/usr/share/blockhost/monitor.js" ]; then
+    echo "ERROR: Failed to create monitor bundle"
+    exit 1
+fi
+echo "  monitor.js ($(du -h "$PKG_DIR/usr/share/blockhost/monitor.js" | cut -f1))"
 
-cat > "$PKG_DIR/usr/bin/bw" << EOF
+# Bundle bw CLI
+npx esbuild "$PROJECT_DIR/src/bw/index.ts" \
+    "${ESBUILD_COMMON[@]}" \
+    --outfile="$PKG_DIR/usr/share/blockhost/bw.js"
+
+if [ ! -f "$PKG_DIR/usr/share/blockhost/bw.js" ]; then
+    echo "ERROR: Failed to create bw CLI bundle"
+    exit 1
+fi
+echo "  bw.js ($(du -h "$PKG_DIR/usr/share/blockhost/bw.js" | cut -f1))"
+
+cat > "$PKG_DIR/usr/bin/bw" << 'EOF'
 #!/bin/sh
-exec $TSX /usr/share/blockhost/src/bw/index.ts "\$@"
+exec node /usr/share/blockhost/bw.js "$@"
 EOF
 
-cat > "$PKG_DIR/usr/bin/ab" << EOF
+# Bundle ab CLI
+npx esbuild "$PROJECT_DIR/src/ab/index.ts" \
+    "${ESBUILD_COMMON[@]}" \
+    --outfile="$PKG_DIR/usr/share/blockhost/ab.js"
+
+if [ ! -f "$PKG_DIR/usr/share/blockhost/ab.js" ]; then
+    echo "ERROR: Failed to create ab CLI bundle"
+    exit 1
+fi
+echo "  ab.js ($(du -h "$PKG_DIR/usr/share/blockhost/ab.js" | cut -f1))"
+
+cat > "$PKG_DIR/usr/bin/ab" << 'EOF'
 #!/bin/sh
-exec $TSX /usr/share/blockhost/src/ab/index.ts "\$@"
+exec node /usr/share/blockhost/ab.js "$@"
 EOF
 
-cat > "$PKG_DIR/usr/bin/is" << EOF
+# Bundle is CLI
+npx esbuild "$PROJECT_DIR/src/is/index.ts" \
+    "${ESBUILD_COMMON[@]}" \
+    --outfile="$PKG_DIR/usr/share/blockhost/is.js"
+
+if [ ! -f "$PKG_DIR/usr/share/blockhost/is.js" ]; then
+    echo "ERROR: Failed to create is CLI bundle"
+    exit 1
+fi
+echo "  is.js ($(du -h "$PKG_DIR/usr/share/blockhost/is.js" | cut -f1))"
+
+cat > "$PKG_DIR/usr/bin/is" << 'EOF'
 #!/bin/sh
-exec $TSX /usr/share/blockhost/src/is/index.ts "\$@"
+exec node /usr/share/blockhost/is.js "$@"
 EOF
 
-cat > "$PKG_DIR/usr/bin/bhcrypt" << EOF
+# Bundle bhcrypt CLI
+npx esbuild "$PROJECT_DIR/src/bhcrypt.ts" \
+    "${ESBUILD_COMMON[@]}" \
+    --outfile="$PKG_DIR/usr/share/blockhost/bhcrypt.js"
+
+if [ ! -f "$PKG_DIR/usr/share/blockhost/bhcrypt.js" ]; then
+    echo "ERROR: Failed to create bhcrypt CLI bundle"
+    exit 1
+fi
+echo "  bhcrypt.js ($(du -h "$PKG_DIR/usr/share/blockhost/bhcrypt.js" | cut -f1))"
+
+cat > "$PKG_DIR/usr/bin/bhcrypt" << 'EOF'
 #!/bin/sh
-exec $TSX /usr/share/blockhost/src/bhcrypt.ts "\$@"
+exec node /usr/share/blockhost/bhcrypt.js "$@"
 EOF
 
-cat > "$PKG_DIR/usr/bin/blockhost-mint-nft" << EOF
+# Bundle mint_nft CLI
+npx esbuild "$PROJECT_DIR/scripts/mint_nft.ts" \
+    "${ESBUILD_COMMON[@]}" \
+    --outfile="$PKG_DIR/usr/share/blockhost/mint_nft.js"
+
+if [ -f "$PKG_DIR/usr/share/blockhost/mint_nft.js" ]; then
+    echo "  mint_nft.js ($(du -h "$PKG_DIR/usr/share/blockhost/mint_nft.js" | cut -f1))"
+    cat > "$PKG_DIR/usr/bin/blockhost-mint-nft" << 'EOF'
 #!/bin/sh
-exec $TSX /usr/share/blockhost/scripts/mint_nft.ts "\$@"
+exec node /usr/share/blockhost/mint_nft.js "$@"
 EOF
+else
+    echo "WARNING: Failed to bundle mint_nft CLI"
+fi
+
+# Bundle keygen helper
+npx esbuild "$PROJECT_DIR/scripts/keygen.ts" \
+    "${ESBUILD_COMMON[@]}" \
+    --format=cjs \
+    --outfile="$PKG_DIR/usr/share/blockhost/keygen.js"
+
+if [ -f "$PKG_DIR/usr/share/blockhost/keygen.js" ]; then
+    echo "  keygen.js ($(du -h "$PKG_DIR/usr/share/blockhost/keygen.js" | cut -f1))"
+else
+    echo "WARNING: Failed to bundle keygen.js"
+fi
+
+chmod 755 "$PKG_DIR/usr/bin/"*
 
 # ============================================
 # Copy Aiken contract artifacts (plutus.json)
@@ -99,7 +162,6 @@ fi
 echo ""
 echo "Creating DEBIAN control files..."
 
-# Create DEBIAN/control
 cat > "$PKG_DIR/DEBIAN/control" << EOF
 Package: blockhost-engine-cardano
 Version: ${VERSION}
@@ -114,15 +176,14 @@ Maintainer: Blockhost <admin@blockhost.io>
 Description: Cardano engine for Blockhost VM hosting
  Blockhost Engine provides the core subscription management system on Cardano:
  - Aiken smart contract artifacts (plutus.json)
- - Blockchain event monitor service (TypeScript, runs via tsx on Node.js)
+ - Blockchain event monitor service (bundled JS, runs on Node.js)
  - Event handlers for VM provisioning and NFT minting
  - CLI tools: bw (wallet), ab (addressbook), is (identity), bhcrypt (crypto)
  - Installer wizard plugin for blockchain configuration
  .
- Ships TypeScript source with production node_modules. Runs via tsx.
+ All TypeScript is bundled into self-contained JS files via esbuild.
 EOF
 
-# Create DEBIAN/postinst
 cat > "$PKG_DIR/DEBIAN/postinst" << 'EOF'
 #!/bin/bash
 set -e
@@ -149,7 +210,6 @@ esac
 exit 0
 EOF
 
-# Create DEBIAN/prerm
 cat > "$PKG_DIR/DEBIAN/prerm" << 'EOF'
 #!/bin/bash
 set -e
@@ -164,7 +224,6 @@ esac
 exit 0
 EOF
 
-# Create DEBIAN/postrm
 cat > "$PKG_DIR/DEBIAN/postrm" << 'EOF'
 #!/bin/bash
 set -e
@@ -242,21 +301,25 @@ dpkg-deb --info "$SCRIPT_DIR/${PKG_NAME}.deb"
 # Show what's included
 echo ""
 echo "Package contents:"
-echo "  /usr/share/blockhost/src/          - TypeScript source"
-echo "  /usr/share/blockhost/scripts/      - keygen.ts, mint_nft.ts"
-echo "  /usr/share/blockhost/node_modules/ - Production dependencies ($MODULES_SIZE)"
-echo "  /usr/bin/bw                        - Blockwallet CLI wrapper (tsx)"
-echo "  /usr/bin/ab                        - Addressbook CLI wrapper (tsx)"
-echo "  /usr/bin/is                        - Identity predicate CLI wrapper (tsx)"
-echo "  /usr/bin/bhcrypt                   - Crypto tool CLI wrapper (tsx)"
-echo "  /usr/bin/blockhost-deploy-contracts - Contract deployer script"
-echo "  /usr/bin/blockhost-mint-nft        - NFT minting CLI wrapper (tsx)"
-echo "  /usr/bin/blockhost-generate-signup  - Signup page generator"
-echo "  /usr/share/blockhost/signup-engine.js - Signup page engine bundle"
-echo "  /usr/lib/python3/dist-packages/blockhost/engine_cardano/ - Engine wizard plugin"
-echo "  /usr/share/blockhost/engine.json   - Engine manifest"
-echo "  /usr/share/blockhost/contracts/    - Aiken contract artifacts"
-echo "  /lib/systemd/system/               - Systemd service unit"
+echo "  /usr/share/blockhost/monitor.js  - Bundled monitor"
+echo "  /usr/share/blockhost/bw.js       - Bundled bw CLI"
+echo "  /usr/share/blockhost/ab.js       - Bundled ab CLI"
+echo "  /usr/share/blockhost/is.js       - Bundled is CLI"
+echo "  /usr/share/blockhost/bhcrypt.js  - Bundled bhcrypt CLI"
+echo "  /usr/share/blockhost/mint_nft.js - Bundled mint_nft CLI"
+echo "  /usr/share/blockhost/keygen.js   - Bundled keygen helper"
+echo "  /usr/bin/bw                      - Blockwallet CLI wrapper"
+echo "  /usr/bin/ab                      - Addressbook CLI wrapper"
+echo "  /usr/bin/is                      - Identity predicate CLI wrapper"
+echo "  /usr/bin/bhcrypt                 - Crypto tool CLI wrapper"
+echo "  /usr/bin/blockhost-deploy-contracts - Contract deployer"
+echo "  /usr/bin/blockhost-mint-nft      - NFT minting CLI wrapper"
+echo "  /usr/bin/blockhost-generate-signup - Signup page generator"
+echo "  /usr/share/blockhost/signup-engine.js - Signup page engine"
+echo "  /usr/lib/python3/dist-packages/blockhost/engine_cardano/ - Wizard plugin"
+echo "  /usr/share/blockhost/engine.json - Engine manifest"
+echo "  /usr/share/blockhost/contracts/  - Aiken contract artifacts"
+echo "  /lib/systemd/system/             - Systemd service unit"
 
 # Contract artifacts status
 echo ""
@@ -273,7 +336,3 @@ if [ -d "$(dirname "$PACKAGES_HOST_DIR")" ]; then
     echo ""
     echo "Copied to: $PACKAGES_HOST_DIR/${PKG_NAME}.deb"
 fi
-
-# Auth-svc template package (blockhost-auth-svc) removed.
-# Now maintained by the libpam-web3 Cardano plugin submodule.
-# See: cardano-auth-plugin.zip for the reference implementation.
