@@ -750,7 +750,12 @@ def finalize_chain_config(config: dict) -> tuple[bool, Optional[str]]:
                 import yaml
 
                 existing = yaml.safe_load(web3_path.read_text()) or {}
+                # Replace the blockchain section entirely — don't merge with
+                # stale fields from other engines (e.g. EVM chain_id, rpc_url)
+                existing["blockchain"] = web3_blockchain
                 for section, values in web3_config.items():
+                    if section == "blockchain":
+                        continue  # already replaced above
                     if isinstance(values, dict) and isinstance(
                         existing.get(section), dict
                     ):
