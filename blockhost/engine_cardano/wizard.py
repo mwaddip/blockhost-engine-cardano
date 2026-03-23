@@ -592,6 +592,7 @@ def finalize_contracts(config: dict) -> tuple[bool, Optional[str]]:
         blockfrost_project_id = blockchain.get("blockfrost_project_id", "")
         network = blockchain.get("network", "preprod")
 
+
         if contract_mode == "existing":
             nft = blockchain.get("nft_policy_id", "")
             sub = blockchain.get("subscription_policy_id", "")
