@@ -197,6 +197,41 @@ Aiken booleans: `True` = `Constr(1, [])`, `False` = `Constr(0, [])`.
 When decoding, a generic CBOR decoder will strip the tag — you need a
 Plutus-aware decoder that converts tags 121-127 back to `Constr(0-6, fields)`.
 
+## Reference script encoding in outputs
+
+Reference scripts (field 3 in a post-Babbage output) use CBOR-in-CBOR:
+
+```
+output = {
+  0: address_bytes,
+  1: value,
+  3: #6.24(bytes .cbor [language_id, script_bytes])
+}
+```
+
+The `script_bytes` in the `[language_id, script_bytes]` array must be the
+**full CBOR byte string** from `plutus.json` `compiledCode` — wrapped in
+`cborBytes()`. This means the encoding is effectively double-wrapped:
+
+```
+cborTag(24, cborBytes(cborArray([cborUint(3), cborBytes(hexToBytes(compiledCode))])))
+```
+
+The inner `cborBytes()` wraps the compiledCode (which is itself a CBOR byte
+string) in another CBOR byte string layer. Without this, the node unwraps
+the compiledCode's CBOR header and gets raw flat UPLC bytes, which it
+reports as `MalformedReferenceScripts`.
+
+The script hash for a reference script equals:
+```
+blake2b_224(0x03 ++ hexToBytes(compiledCode))
+```
+
+This is the same as the `hash` field in `plutus.json`.
+
+**Symptom if wrong:** `MalformedReferenceScripts` — the node can parse the
+output but the script content fails deserialization.
+
 ## Input sorting
 
 Conway era requires transaction inputs to be sorted lexicographically by

@@ -174,7 +174,7 @@ function buildInputsCbor(utxos: Utxo[]): Uint8Array {
 }
 
 /** Build CBOR for a simple output (ADA only or ADA + tokens). */
-function buildOutputCbor(addrHex: string, lovelace: bigint, tokens?: [string, bigint][]): Uint8Array {
+export function buildOutputCbor(addrHex: string, lovelace: bigint, tokens?: [string, bigint][]): Uint8Array {
   const addrBytes = cborBytes(hexToBytes(addrHex));
   if (tokens && tokens.length > 0) {
     const multiAsset = buildMultiAssetCbor(tokens);
