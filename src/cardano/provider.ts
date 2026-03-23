@@ -51,6 +51,8 @@ export interface ProtocolParams {
   minFeeB: number;
   /** Coins per UTXO byte (for min UTXO calculation) */
   coinsPerUtxoByte: number;
+  /** PlutusV3 cost model (array of integers) — needed for script_data_hash */
+  costModelV3?: number[];
 }
 
 // ── Koios provider ──────────────────────────────────────────────────────────
@@ -225,10 +227,12 @@ class KoiosProvider implements CardanoProvider {
     const result = await this.request("/epoch_params?limit=1") as Array<Record<string, unknown>> | null;
     if (!result || result.length === 0) throw new Error("Failed to fetch protocol params from Koios");
     const p = result[0]!;
+    const costModels = p["cost_models"] as Record<string, number[]> | undefined;
     return {
       minFeeA: Number(p["min_fee_a"] ?? 44),
       minFeeB: Number(p["min_fee_b"] ?? 155381),
       coinsPerUtxoByte: Number(p["coins_per_utxo_size"] ?? 4310),
+      costModelV3: costModels?.["PlutusV3"],
     };
   }
 }
@@ -320,10 +324,17 @@ class BlockfrostProvider implements CardanoProvider {
 
   async fetchProtocolParams(): Promise<ProtocolParams> {
     const p = await this.client.epochsLatestParameters();
+    // Blockfrost cost_models needs a separate call
+    let costModelV3: number[] | undefined;
+    try {
+      const cm = p.cost_models as Record<string, unknown> | null;
+      if (cm?.["PlutusV3"]) costModelV3 = cm["PlutusV3"] as number[];
+    } catch { /* not available */ }
     return {
       minFeeA: p.min_fee_a,
       minFeeB: p.min_fee_b,
       coinsPerUtxoByte: Number(p.coins_per_utxo_size ?? "4310"),
+      costModelV3,
     };
   }
 

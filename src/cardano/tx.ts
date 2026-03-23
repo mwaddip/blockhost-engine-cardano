@@ -419,9 +419,11 @@ export async function buildAndSubmitScriptTx(params: {
   mints?: MintEntry[];
   /** PlutusV3 spending validator CBOR hex (from plutus.json compiledCode) */
   spendingScriptCbor?: string;
-  /** Validity range (POSIX ms) */
+  /** Validity range (POSIX ms) — converted to slots automatically */
   validFrom?: number;
   validTo?: number;
+  /** Cardano network (for slot conversion). Default: preprod */
+  network?: import("./types.js").CardanoNetwork;
   /** Required signer key hashes (hex) */
   requiredSigners?: string[];
   /** 64-byte signing key (kL + kR) */
@@ -430,11 +432,15 @@ export async function buildAndSubmitScriptTx(params: {
   const {
     provider, walletAddress, scriptInputs, outputs,
     mints, spendingScriptCbor, validFrom, validTo,
-    requiredSigners, signingKey,
+    network: net = "preprod", requiredSigners, signingKey,
   } = params;
+
+  const { posixToSlot } = await import("./time.js");
 
   const kL = signingKey.slice(0, 32);
   const kR = signingKey.slice(32, 64);
+
+  const hasScripts = scriptInputs.length > 0 || (mints && mints.length > 0);
 
   // 1. Fetch wallet UTXOs and protocol params
   const [rawWalletUtxos, pp] = await Promise.all([
@@ -443,8 +449,11 @@ export async function buildAndSubmitScriptTx(params: {
   ]);
   const walletUtxos = parseKoiosUtxos(rawWalletUtxos);
 
-  const validFromSlot = validFrom !== undefined ? BigInt(validFrom) : undefined;
-  const validToSlot = BigInt(validTo ?? (Date.now() + 600_000));
+  // Convert POSIX ms → slot numbers
+  const validFromSlot = validFrom !== undefined
+    ? BigInt(posixToSlot(validFrom, net))
+    : undefined;
+  const validToSlot = BigInt(posixToSlot(validTo ?? (Date.now() + 600_000), net));
 
   // 2. Calculate how much ADA the outputs need
   let outputLovelace = 0n;
@@ -459,8 +468,9 @@ export async function buildAndSubmitScriptTx(params: {
   }
 
   // We need wallet UTXOs for: fee + collateral + any ADA shortfall
-  const maxFee = 500000n;
-  const collateralAmount = maxFee * 3n / 2n; // 150% of fee
+  // Script txs need much higher fees due to execution units
+  const maxFee = hasScripts ? 2_000_000n : 500000n;
+  const collateralAmount = hasScripts ? maxFee * 3n / 2n : 0n; // 150% of fee for scripts
   const adaNeeded = outputLovelace > scriptInputLovelace
     ? outputLovelace - scriptInputLovelace + maxFee + collateralAmount
     : maxFee + collateralAmount;
@@ -549,55 +559,95 @@ export async function buildAndSubmitScriptTx(params: {
     );
   }
 
-  // Build redeemers: array of [tag, index, data, ex_units]
-  // tag 0 = spend, tag 1 = mint
+  // Build redeemers: CBOR array of [tag, index, data, ex_units]
+  // tag 0 = spend, tag 1 = mint. data is raw Plutus Data CBOR (not wrapped in bytes).
+  // Default ex_units are generous — Koios/ogmios can evaluate exact units later.
+  const EX_MEM = 14000000n;
+  const EX_STEPS = 10000000000n;
+
   function buildRedeemers(): Uint8Array {
     const entries: Uint8Array[] = [];
 
-    // Spend redeemers
     for (const si of scriptInputs) {
       const idx = scriptInputIndex(si.utxo);
       entries.push(cborArray([
-        cborUint(0n), // tag: spend
+        cborUint(0n),
         cborUint(BigInt(idx)),
-        cborBytes(hexToBytes(si.redeemerCbor)), // wrapped as bytes — will be unwrapped below
-        cborArray([cborUint(14000000n), cborUint(10000000000n)]), // ex_units (budget)
+        hexToBytes(si.redeemerCbor), // raw Plutus Data CBOR
+        cborArray([cborUint(EX_MEM), cborUint(EX_STEPS)]),
       ]));
     }
 
-    // Mint redeemers
     if (mints) {
-      // Mint redeemer index is the position of the policy in the sorted mint map
       const sortedPolicies = mints.map(m => m.policyId).sort();
       for (const m of mints) {
         const idx = sortedPolicies.indexOf(m.policyId);
         entries.push(cborArray([
-          cborUint(1n), // tag: mint
+          cborUint(1n),
           cborUint(BigInt(idx)),
-          cborBytes(hexToBytes(m.redeemerCbor)),
-          cborArray([cborUint(14000000n), cborUint(10000000000n)]),
+          hexToBytes(m.redeemerCbor),
+          cborArray([cborUint(EX_MEM), cborUint(EX_STEPS)]),
         ]));
       }
     }
 
-    return cborMap(entries.map((e, i) => [cborUint(BigInt(i)), e]));
+    return cborArray(entries);
   }
 
-  // Build Plutus script witnesses (field 6 in witness set)
-  function buildScriptWitnesses(): Uint8Array[] {
+  // Build Plutus V3 script witnesses (field 7 in witness set).
+  // compiledCode from plutus.json is hex-encoded CBOR (a byte string wrapping flat UPLC).
+  // The witness set expects raw CBOR bytes — hexToBytes gives us exactly that.
+  function buildPlutusV3Scripts(): Uint8Array[] {
     const scripts: Uint8Array[] = [];
-    // Spending validator
     if (spendingScriptCbor) {
-      // PlutusV3 script: [3, script_bytes]  (3 = PlutusV3 language tag)
-      scripts.push(cborArray([cborUint(3n), cborBytes(hexToBytes(spendingScriptCbor))]));
+      scripts.push(hexToBytes(spendingScriptCbor));
     }
-    // Minting policies
     if (mints) {
       for (const m of mints) {
-        scripts.push(cborArray([cborUint(3n), cborBytes(hexToBytes(m.scriptCbor))]));
+        scripts.push(hexToBytes(m.scriptCbor));
       }
     }
     return scripts;
+  }
+
+  /**
+   * Compute script_data_hash per Alonzo/Babbage/Conway spec:
+   *   blake2b_256(redeemers_bytes ++ datums_bytes ++ language_views_bytes)
+   *
+   * - redeemers_bytes: the CBOR-encoded redeemers array
+   * - datums_bytes: CBOR empty array (0x80) when using inline datums only
+   * - language_views_bytes: CBOR map { language_id: [cost_model_values] }
+   *   where language_id is an integer (0=V1, 1=V2, 2=V3)
+   *
+   * The language views encoding uses the CBOR *integer array* format for
+   * cost model values — each value encoded as a CBOR integer, wrapped in
+   * a definite-length CBOR array.
+   */
+  function computeScriptDataHash(redeemersCbor: Uint8Array): Uint8Array {
+    const emptyDatums = new Uint8Array([0x80]); // empty CBOR array
+
+    // Encode language views: { 2: [cost_model_values...] } for PlutusV3
+    let languageViews: Uint8Array;
+    if (pp.costModelV3 && pp.costModelV3.length > 0) {
+      const values = pp.costModelV3.map(v => {
+        if (v >= 0) return cborUint(BigInt(v));
+        return cborHeader(1, BigInt(-v - 1)); // negative CBOR int
+      });
+      const costModelArray = cborArray(values);
+      languageViews = cborMap([[cborUint(2n), costModelArray]]);
+    } else {
+      languageViews = new Uint8Array([0xa0]); // empty map
+    }
+
+    // Concatenate: redeemers ++ datums ++ language_views
+    const total = redeemersCbor.length + emptyDatums.length + languageViews.length;
+    const combined = new Uint8Array(total);
+    let offset = 0;
+    combined.set(redeemersCbor, offset); offset += redeemersCbor.length;
+    combined.set(emptyDatums, offset); offset += emptyDatums.length;
+    combined.set(languageViews, offset);
+
+    return blake2b(combined, { dkLen: 32 });
   }
 
   // Build full transaction body
@@ -640,17 +690,26 @@ export async function buildAndSubmitScriptTx(params: {
       bodyFields.push([cborUint(9n), cborMap(policyEntries)]);
     }
 
-    // Collateral (field 13) — use the first wallet UTXO
-    if (scriptInputs.length > 0 && walletSelected.length > 0) {
+    // Collateral (fields 13, 16, 17) — required for any Plutus script execution
+    if (hasScripts && walletSelected.length > 0) {
       const collUtxo = walletSelected[0]!;
+      // Field 13: collateral inputs
       bodyFields.push([
         cborUint(13n),
         cborTag(258, cborArray([
           cborArray([cborBytes(hexToBytes(collUtxo.txHash)), cborUint(BigInt(collUtxo.index))]),
         ])),
       ]);
-      // Total collateral (field 17)
+      // Field 16: collateral return (send excess back to wallet)
       const totalColl = fee * 3n / 2n;
+      const collReturn = collUtxo.lovelace - totalColl;
+      if (collReturn > 0n) {
+        bodyFields.push([
+          cborUint(16n),
+          buildOutputCbor(addressToHex(walletAddress), collReturn),
+        ]);
+      }
+      // Field 17: total collateral
       bodyFields.push([cborUint(17n), cborUint(totalColl)]);
     }
 
@@ -665,6 +724,13 @@ export async function buildAndSubmitScriptTx(params: {
     // Validity start (field 8) — POSIX ms
     if (validFromSlot !== undefined) {
       bodyFields.push([cborUint(8n), cborUint(validFromSlot)]);
+    }
+
+    // Script data hash (field 11) — required when scripts are present
+    if (scriptInputs.length > 0 || (mints && mints.length > 0)) {
+      const redeemersCbor = buildRedeemers();
+      const sdh = computeScriptDataHash(redeemersCbor);
+      bodyFields.push([cborUint(11n), cborBytes(sdh)]);
     }
 
     // Sort body fields by key for canonical CBOR
@@ -693,15 +759,15 @@ export async function buildAndSubmitScriptTx(params: {
     const vkeyWitness = cborArray([cborBytes(pubKeyBytes), cborBytes(signature)]);
     witnessFields.push([cborUint(0n), cborArray([vkeyWitness])]);
 
-    // Plutus scripts (field 6) — PlutusV3
-    const scriptWitnesses = buildScriptWitnesses();
-    if (scriptWitnesses.length > 0) {
-      witnessFields.push([cborUint(6n), cborArray(scriptWitnesses)]);
-    }
-
     // Redeemers (field 5)
     if (scriptInputs.length > 0 || (mints && mints.length > 0)) {
       witnessFields.push([cborUint(5n), buildRedeemers()]);
+    }
+
+    // PlutusV3 scripts (field 7)
+    const v3Scripts = buildPlutusV3Scripts();
+    if (v3Scripts.length > 0) {
+      witnessFields.push([cborUint(7n), cborArray(v3Scripts)]);
     }
 
     return cborMap(witnessFields);
