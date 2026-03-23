@@ -145,9 +145,20 @@ export function selectUtxos(
 
 // ── Fee calculation ─────────────────────────────────────────────────────────
 
-/** Calculate the minimum fee for a transaction of the given byte size. */
-export function calculateFee(txSizeBytes: number, pp: ProtocolParams): bigint {
-  return BigInt(pp.minFeeA) * BigInt(txSizeBytes) + BigInt(pp.minFeeB);
+/** Calculate the minimum fee for a transaction.
+ *  For simple txs: minFeeA * size + minFeeB
+ *  For script txs: adds ceil(priceMem * totalMem) + ceil(priceStep * totalSteps) */
+export function calculateFee(
+  txSizeBytes: number,
+  pp: ProtocolParams,
+  exUnits?: { mem: bigint; steps: bigint },
+): bigint {
+  let fee = BigInt(pp.minFeeA) * BigInt(txSizeBytes) + BigInt(pp.minFeeB);
+  if (exUnits) {
+    fee += BigInt(Math.ceil(pp.priceMem * Number(exUnits.mem)));
+    fee += BigInt(Math.ceil(pp.priceStep * Number(exUnits.steps)));
+  }
+  return fee;
 }
 
 // ── CBOR builders ───────────────────────────────────────────────────────────
@@ -565,46 +576,43 @@ export async function buildAndSubmitScriptTx(params: {
   const EX_MEM = 14000000n;
   const EX_STEPS = 10000000000n;
 
+  // Conway redeemers: map of [tag, index] → [data, ex_units]
   function buildRedeemers(): Uint8Array {
-    const entries: Uint8Array[] = [];
+    const mapEntries: [Uint8Array, Uint8Array][] = [];
 
     for (const si of scriptInputs) {
       const idx = scriptInputIndex(si.utxo);
-      entries.push(cborArray([
-        cborUint(0n),
-        cborUint(BigInt(idx)),
-        hexToBytes(si.redeemerCbor), // raw Plutus Data CBOR
-        cborArray([cborUint(EX_MEM), cborUint(EX_STEPS)]),
-      ]));
+      const key = cborArray([cborUint(0n), cborUint(BigInt(idx))]); // [spend, index]
+      const val = cborArray([hexToBytes(si.redeemerCbor), cborArray([cborUint(EX_MEM), cborUint(EX_STEPS)])]);
+      mapEntries.push([key, val]);
     }
 
     if (mints) {
       const sortedPolicies = mints.map(m => m.policyId).sort();
       for (const m of mints) {
         const idx = sortedPolicies.indexOf(m.policyId);
-        entries.push(cborArray([
-          cborUint(1n),
-          cborUint(BigInt(idx)),
-          hexToBytes(m.redeemerCbor),
-          cborArray([cborUint(EX_MEM), cborUint(EX_STEPS)]),
-        ]));
+        const key = cborArray([cborUint(1n), cborUint(BigInt(idx))]); // [mint, index]
+        const val = cborArray([hexToBytes(m.redeemerCbor), cborArray([cborUint(EX_MEM), cborUint(EX_STEPS)])]);
+        mapEntries.push([key, val]);
       }
     }
 
-    return cborArray(entries);
+    return cborMap(mapEntries);
   }
 
   // Build Plutus V3 script witnesses (field 7 in witness set).
   // compiledCode from plutus.json is hex-encoded CBOR (a byte string wrapping flat UPLC).
-  // The witness set expects raw CBOR bytes — hexToBytes gives us exactly that.
+  // In the witness set, each script entry must be cborBytes(compiledCode_bytes) —
+  // the same double-wrap as reference scripts. The node computes the script hash
+  // as blake2b_224(0x03 ++ full_CBOR) which matches plutus.json's hash field.
   function buildPlutusV3Scripts(): Uint8Array[] {
     const scripts: Uint8Array[] = [];
     if (spendingScriptCbor) {
-      scripts.push(hexToBytes(spendingScriptCbor));
+      scripts.push(cborBytes(hexToBytes(spendingScriptCbor)));
     }
     if (mints) {
       for (const m of mints) {
-        scripts.push(hexToBytes(m.scriptCbor));
+        scripts.push(cborBytes(hexToBytes(m.scriptCbor)));
       }
     }
     return scripts;
@@ -624,7 +632,9 @@ export async function buildAndSubmitScriptTx(params: {
    * a definite-length CBOR array.
    */
   function computeScriptDataHash(redeemersCbor: Uint8Array): Uint8Array {
-    const emptyDatums = new Uint8Array([0x80]); // empty CBOR array
+    // When no datums in witness set, datum part is empty (zero bytes) per the ledger spec:
+    // "if null (d ^. unTxDatsL) then mempty else originalBytes d"
+    const emptyDatums = new Uint8Array(0);
 
     // Encode language views: { 2: [cost_model_values...] } for PlutusV3
     let languageViews: Uint8Array;
@@ -692,7 +702,12 @@ export async function buildAndSubmitScriptTx(params: {
 
     // Collateral (fields 13, 16, 17) — required for any Plutus script execution
     if (hasScripts && walletSelected.length > 0) {
-      const collUtxo = walletSelected[0]!;
+      // Pick an ADA-only UTXO with the most ADA for collateral
+      const adaOnlyUtxos = walletSelected.filter(u => Object.keys(u.tokens).length === 0);
+      if (adaOnlyUtxos.length === 0) {
+        throw new Error("No ADA-only UTXOs available for collateral — send ADA to a clean UTXO first");
+      }
+      const collUtxo = adaOnlyUtxos.sort((a, b) => Number(b.lovelace - a.lovelace))[0]!;
       // Field 13: collateral inputs
       bodyFields.push([
         cborUint(13n),
@@ -701,7 +716,7 @@ export async function buildAndSubmitScriptTx(params: {
         ])),
       ]);
       // Field 16: collateral return (send excess back to wallet)
-      const totalColl = fee * 3n / 2n;
+      const totalColl = (fee * 3n + 1n) / 2n; // ceiling division for 150%
       const collReturn = collUtxo.lovelace - totalColl;
       if (collReturn > 0n) {
         bodyFields.push([
@@ -773,13 +788,19 @@ export async function buildAndSubmitScriptTx(params: {
     return cborMap(witnessFields);
   }
 
+  // Total execution units across all redeemers (for fee calculation)
+  const numRedeemers = scriptInputs.length + (mints?.length ?? 0);
+  const totalExUnits = numRedeemers > 0
+    ? { mem: EX_MEM * BigInt(numRedeemers), steps: EX_STEPS * BigInt(numRedeemers) }
+    : undefined;
+
   // 4. Two-pass fee calculation
   const firstBody = buildFullTxBody(maxFee);
   const firstHash = blake2b(firstBody, { dkLen: 32 });
   const firstWitness = buildFullWitnessSet(firstHash);
   const firstTx = assembleTx(firstBody, firstWitness);
 
-  const exactFee = calculateFee(firstTx.length, pp);
+  const exactFee = calculateFee(firstTx.length, pp, totalExUnits);
 
   const finalBody = buildFullTxBody(exactFee);
   const finalHash = blake2b(finalBody, { dkLen: 32 });
@@ -787,7 +808,7 @@ export async function buildAndSubmitScriptTx(params: {
   const finalTx = assembleTx(finalBody, finalWitness);
 
   // Verify fee covers final size
-  const verifyFee = calculateFee(finalTx.length, pp);
+  const verifyFee = calculateFee(finalTx.length, pp, totalExUnits);
   if (verifyFee > exactFee) {
     const safeBody = buildFullTxBody(verifyFee);
     const safeHash = blake2b(safeBody, { dkLen: 32 });

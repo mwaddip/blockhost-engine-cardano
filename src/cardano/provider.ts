@@ -53,6 +53,10 @@ export interface ProtocolParams {
   coinsPerUtxoByte: number;
   /** PlutusV3 cost model (array of integers) — needed for script_data_hash */
   costModelV3?: number[];
+  /** Price per memory unit (lovelace, decimal) — for script fee calculation */
+  priceMem: number;
+  /** Price per CPU step (lovelace, decimal) — for script fee calculation */
+  priceStep: number;
 }
 
 // ── Koios provider ──────────────────────────────────────────────────────────
@@ -233,6 +237,8 @@ class KoiosProvider implements CardanoProvider {
       minFeeB: Number(p["min_fee_b"] ?? 155381),
       coinsPerUtxoByte: Number(p["coins_per_utxo_size"] ?? 4310),
       costModelV3: costModels?.["PlutusV3"],
+      priceMem: Number(p["price_mem"] ?? 0.0577),
+      priceStep: Number(p["price_step"] ?? 0.0000721),
     };
   }
 }
@@ -335,6 +341,8 @@ class BlockfrostProvider implements CardanoProvider {
       minFeeB: p.min_fee_b,
       coinsPerUtxoByte: Number(p.coins_per_utxo_size ?? "4310"),
       costModelV3,
+      priceMem: Number(p.price_mem ?? "0.0577"),
+      priceStep: Number(p.price_step ?? "0.0000721"),
     };
   }
 
