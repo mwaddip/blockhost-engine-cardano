@@ -10,10 +10,7 @@
  *   blockhost-mint-nft --owner-wallet <bech32> --user-encrypted <hex>
  *   blockhost-mint-nft --owner-wallet <bech32> --user-encrypted <hex> --dry-run
  *
- * Config:
- *   Reads blockchain settings from /etc/blockhost/web3-defaults.yaml
- *   Reads deployer mnemonic from DEPLOYER_MNEMONIC env var or /etc/blockhost/deployer.key
- *   Reads/writes token counter from /var/lib/blockhost/next-nft-id
+ * Uses the minimal tx toolkit (src/cardano/) — no Lucid.
  *
  * stdout: token ID (integer) on success
  * stderr: progress / error messages
@@ -23,14 +20,16 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as yaml from "js-yaml";
-import {
-  Lucid, Blockfrost, Koios,
-  applyParamsToScript, mintingPolicyToId, getAddressDetails,
-  Data, Constr,
-} from "@lucid-evolution/lucid";
-import type { Network } from "@lucid-evolution/lucid";
+import { blake2b } from "@noble/hashes/blake2b";
+import { deriveWallet } from "../src/cardano/wallet.js";
+import { getProvider } from "../src/cardano/provider.js";
+import { getPaymentKeyHash } from "../src/cardano/address.js";
+import { Constr, Data } from "../src/cardano/data.js";
+import { buildAndSubmitScriptTx } from "../src/cardano/tx.js";
+import { hexToBytes, bytesToHex } from "../src/cardano/cbor.js";
 import { userTokenAssetName, referenceTokenAssetName } from "../src/nft/mint.js";
 import type { CardanoNetwork } from "../src/cardano/types.js";
+import type { Assets } from "../src/cardano/tx.js";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -52,26 +51,7 @@ interface Web3Yaml {
     blockfrost_project_id?: string;
     network?: string;
     nft_policy_id?: string;
-    subscription_validator_address?: string;
-    subscription_validator_hash?: string;
   };
-}
-
-interface Web3Config {
-  blockfrostProjectId: string;
-  network: CardanoNetwork;
-  nftPolicyId: string;
-  referenceScriptAddress: string;
-}
-
-/** Plutus blueprint JSON structure (only the fields we need). */
-interface PlutusBlueprint {
-  validators: Array<{
-    title: string;
-    compiledCode: string;
-    hash: string;
-    parameters?: Array<{ title: string }>;
-  }>;
 }
 
 // ── Argument parsing ──────────────────────────────────────────────────────────
@@ -107,10 +87,9 @@ function parseArgs(): Args {
     process.exit(1);
   }
 
-  // Basic bech32 sanity — addr1... (mainnet) or addr_test1... (testnet)
   if (!/^addr(_test)?1[a-z0-9]+$/.test(ownerWallet)) {
     process.stderr.write(
-      "blockhost-mint-nft: --owner-wallet must be a bech32 Cardano address (addr1... or addr_test1...)\n",
+      "blockhost-mint-nft: --owner-wallet must be a bech32 Cardano address\n",
     );
     process.exit(1);
   }
@@ -125,7 +104,7 @@ function parseArgs(): Args {
 
 // ── Config loading ────────────────────────────────────────────────────────────
 
-function loadConfig(): Web3Config {
+function loadConfig() {
   const cfgPath = `${CONFIG_DIR}/web3-defaults.yaml`;
   if (!fs.existsSync(cfgPath)) {
     process.stderr.write(`blockhost-mint-nft: config not found: ${cfgPath}\n`);
@@ -135,25 +114,15 @@ function loadConfig(): Web3Config {
   const raw = yaml.load(fs.readFileSync(cfgPath, "utf8")) as Web3Yaml;
   const bc  = raw.blockchain;
 
-  if (!bc?.blockfrost_project_id) {
-    process.stderr.write("blockhost-mint-nft: blockchain.blockfrost_project_id not set\n");
-    process.exit(1);
-  }
-  if (!bc.nft_policy_id || !/^[0-9a-fA-F]{56}$/.test(bc.nft_policy_id)) {
-    process.stderr.write("blockhost-mint-nft: blockchain.nft_policy_id not set or invalid (need 56 hex chars)\n");
-    process.exit(1);
-  }
-
-  const networkRaw = (bc.network ?? "preprod").toLowerCase();
+  const networkRaw = (bc?.network ?? "preprod").toLowerCase();
   const network: CardanoNetwork =
     networkRaw === "mainnet" ? "mainnet" :
     networkRaw === "preview"  ? "preview"  : "preprod";
 
   return {
-    blockfrostProjectId: bc.blockfrost_project_id,
+    blockfrostProjectId: bc?.blockfrost_project_id ?? "",
     network,
-    nftPolicyId: bc.nft_policy_id,
-    referenceScriptAddress: bc.subscription_validator_address ?? "",
+    nftPolicyId: bc?.nft_policy_id ?? "",
   };
 }
 
@@ -164,9 +133,7 @@ function loadMnemonic(): string {
   if (fromEnv) return fromEnv.trim();
 
   if (!fs.existsSync(KEY_PATH)) {
-    process.stderr.write(
-      `blockhost-mint-nft: set DEPLOYER_MNEMONIC or create ${KEY_PATH}\n`,
-    );
+    process.stderr.write(`blockhost-mint-nft: set DEPLOYER_MNEMONIC or create ${KEY_PATH}\n`);
     process.exit(1);
   }
   return fs.readFileSync(KEY_PATH, "utf8").trim();
@@ -174,15 +141,7 @@ function loadMnemonic(): string {
 
 // ── Token ID counter ──────────────────────────────────────────────────────────
 
-/**
- * Read, increment, and write back the NFT token ID counter.
- * Returns the allocated token ID (the value *before* incrementing).
- *
- * The counter file contains a single decimal integer.
- * If it does not exist, we start at 1.
- */
 function allocateTokenId(): number {
-  // Ensure state directory exists.
   if (!fs.existsSync(STATE_DIR)) {
     fs.mkdirSync(STATE_DIR, { recursive: true });
   }
@@ -191,24 +150,16 @@ function allocateTokenId(): number {
   if (fs.existsSync(COUNTER_PATH)) {
     const raw = fs.readFileSync(COUNTER_PATH, "utf8").trim();
     const parsed = parseInt(raw, 10);
-    if (!isNaN(parsed) && parsed > 0) {
-      current = parsed;
-    }
+    if (!isNaN(parsed) && parsed > 0) current = parsed;
   }
 
-  // Write next value immediately so a crash does not re-use this ID.
   fs.writeFileSync(COUNTER_PATH, String(current + 1), { encoding: "utf8" });
   return current;
 }
 
 // ── Blueprint loading ──────────────────────────────────────────────────────
 
-/**
- * Load the NFT minting policy compiled code from plutus.json blueprint.
- * Looks for the validator titled "nft.nft.mint".
- */
 function loadNftCompiledCode(): string {
-  // Resolve plutus.json relative to this script (scripts/ -> project root)
   const blueprintPath = path.resolve(
     path.dirname(new URL(import.meta.url).pathname),
     "..",
@@ -216,45 +167,37 @@ function loadNftCompiledCode(): string {
   );
 
   if (!fs.existsSync(blueprintPath)) {
-    process.stderr.write(`blockhost-mint-nft: blueprint not found: ${blueprintPath}\n`);
-    process.exit(1);
+    // Try config dir
+    const configPath = `${CONFIG_DIR}/plutus.json`;
+    if (!fs.existsSync(configPath)) {
+      process.stderr.write(`blockhost-mint-nft: plutus.json not found\n`);
+      process.exit(1);
+    }
+    const bp = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
+      validators: Array<{ title: string; compiledCode: string }>;
+    };
+    const v = bp.validators.find((v) => v.title === "nft.nft.mint");
+    if (!v) { process.stderr.write("blockhost-mint-nft: nft.nft.mint not found\n"); process.exit(1); }
+    return v.compiledCode;
   }
 
-  const blueprint = JSON.parse(fs.readFileSync(blueprintPath, "utf8")) as PlutusBlueprint;
-  const nftValidator = blueprint.validators.find((v) => v.title === "nft.nft.mint");
-
-  if (!nftValidator) {
-    process.stderr.write("blockhost-mint-nft: nft.nft.mint validator not found in plutus.json\n");
-    process.exit(1);
-  }
-
-  return nftValidator.compiledCode;
+  const bp = JSON.parse(fs.readFileSync(blueprintPath, "utf8")) as {
+    validators: Array<{ title: string; compiledCode: string }>;
+  };
+  const v = bp.validators.find((v) => v.title === "nft.nft.mint");
+  if (!v) { process.stderr.write("blockhost-mint-nft: nft.nft.mint not found\n"); process.exit(1); }
+  return v.compiledCode;
 }
 
-// ── Lucid network mapping ──────────────────────────────────────────────────
+// ── Script hash computation ────────────────────────────────────────────────
 
-function toLucidNetwork(network: CardanoNetwork): Network {
-  switch (network) {
-    case "mainnet": return "Mainnet";
-    case "preview": return "Preview";
-    case "preprod": return "Preprod";
-  }
-}
-
-function blockfrostUrl(network: CardanoNetwork): string {
-  switch (network) {
-    case "mainnet": return "https://cardano-mainnet.blockfrost.io/api/v0";
-    case "preprod": return "https://cardano-preprod.blockfrost.io/api/v0";
-    case "preview": return "https://cardano-preview.blockfrost.io/api/v0";
-  }
-}
-
-function koiosUrl(network: CardanoNetwork): string {
-  switch (network) {
-    case "mainnet": return "https://api.koios.rest/api/v1";
-    case "preview": return "https://preview.koios.rest/api/v1";
-    case "preprod": return "https://preprod.koios.rest/api/v1";
-  }
+/** Compute policy ID = blake2b_224(0x03 ++ compiledCode_bytes) */
+function computePolicyId(compiledCode: string): string {
+  const scriptBytes = hexToBytes(compiledCode);
+  const prefixed = new Uint8Array(1 + scriptBytes.length);
+  prefixed[0] = 0x03; // PlutusV3
+  prefixed.set(scriptBytes, 1);
+  return bytesToHex(blake2b(prefixed, { dkLen: 28 }));
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -264,125 +207,89 @@ async function main(): Promise<void> {
   const cfg      = loadConfig();
   const mnemonic = loadMnemonic();
 
-  // ── Initialise Lucid with provider and wallet from seed ──────────────────
+  process.stderr.write("Deriving wallet...\n");
+  const wallet = await deriveWallet(mnemonic, cfg.network);
+  const provider = getProvider(cfg.network, cfg.blockfrostProjectId);
+  const deployerAddress = wallet.address;
+  const serverKeyHash = getPaymentKeyHash(deployerAddress);
 
-  process.stderr.write("Initialising Lucid Evolution...\n");
-
-  const provider = cfg.blockfrostProjectId
-    ? new Blockfrost(blockfrostUrl(cfg.network), cfg.blockfrostProjectId)
-    : new Koios(koiosUrl(cfg.network));
-
-  const lucid = await Lucid(provider, toLucidNetwork(cfg.network));
-  lucid.selectWallet.fromSeed(mnemonic);
-
-  const deployerAddress = await lucid.wallet().address();
-  process.stderr.write(`Deployer address: ${deployerAddress}\n`);
-
-  // Extract deployer's payment key hash (needed as the server_key_hash parameter)
-  const addressDetails = getAddressDetails(deployerAddress);
-  const serverKeyHash = addressDetails.paymentCredential?.hash;
   if (!serverKeyHash) {
-    process.stderr.write("blockhost-mint-nft: could not extract payment key hash from deployer address\n");
+    process.stderr.write("blockhost-mint-nft: could not extract payment key hash\n");
     process.exit(1);
   }
+
+  process.stderr.write(`Deployer address: ${deployerAddress}\n`);
   process.stderr.write(`Server key hash:  ${serverKeyHash}\n`);
 
-  // ── Load NFT validator and apply server_key_hash parameter ───────────────
-
+  // The NFT policy in plutus.json should already have server_key_hash applied
+  // (via aiken blueprint apply). Verify the computed policy ID matches config.
   const nftCompiledCode = loadNftCompiledCode();
-  const appliedScript = applyParamsToScript(nftCompiledCode, [serverKeyHash]);
-  const mintingPolicy = { type: "PlutusV3" as const, script: appliedScript };
-  const policyId = mintingPolicyToId(mintingPolicy);
+  const policyId = computePolicyId(nftCompiledCode);
   process.stderr.write(`Computed policy ID: ${policyId}\n`);
 
-  // Warn if the computed policy ID does not match the config value
-  if (policyId !== cfg.nftPolicyId) {
+  if (cfg.nftPolicyId && policyId !== cfg.nftPolicyId) {
     process.stderr.write(
-      `WARNING: computed policy ID (${policyId}) differs from config nft_policy_id (${cfg.nftPolicyId})\n` +
-      `Using computed value — the config value may need updating.\n`,
+      `WARNING: computed policy ID (${policyId}) differs from config (${cfg.nftPolicyId})\n`,
     );
   }
 
-  // ── Allocate token ID and compute CIP-68 asset names ─────────────────────
-
+  // Allocate token ID and compute CIP-68 asset names
   const tokenId = allocateTokenId();
-  process.stderr.write(`Allocated token ID: ${tokenId}\n`);
+  const userAssetName = userTokenAssetName(tokenId);
+  const refAssetName  = referenceTokenAssetName(tokenId);
 
-  const userAssetName = userTokenAssetName(tokenId);       // (222) user token
-  const refAssetName  = referenceTokenAssetName(tokenId);  // (100) reference token
-
-  process.stderr.write(`User token asset:      ${policyId}${userAssetName}\n`);
-  process.stderr.write(`Reference token asset: ${policyId}${refAssetName}\n`);
-  process.stderr.write(`Owner wallet:          ${ownerWallet}\n`);
-  process.stderr.write(`User encrypted:        ${userEncrypted || "(none)"}\n`);
-  process.stderr.write(`Network:               ${cfg.network}\n`);
+  process.stderr.write(`Token ID: ${tokenId}\n`);
+  process.stderr.write(`User token:      ${policyId}${userAssetName}\n`);
+  process.stderr.write(`Reference token: ${policyId}${refAssetName}\n`);
 
   if (dryRun) {
-    process.stderr.write("[DRY RUN] Would build and submit mint transaction — not broadcasting\n");
-    process.stderr.write("[DRY RUN] Transaction details:\n");
-    process.stderr.write(`  Mint: 1x ${policyId}${userAssetName} → ${ownerWallet}\n`);
-    process.stderr.write(`  Mint: 1x ${policyId}${refAssetName} → ${deployerAddress}\n`);
-    if (userEncrypted) {
-      process.stderr.write(`  Inline datum (reference token): { userEncrypted: "${userEncrypted}" }\n`);
-    }
-    process.stderr.write(`  Signed by: ${deployerAddress}\n`);
-    // Print token ID to stdout — pipeline reads this
+    process.stderr.write("[DRY RUN] Would mint — not broadcasting\n");
     process.stdout.write(`${tokenId}\n`);
     return;
   }
 
-  // ── Build CIP-68 mint transaction ────────────────────────────────────────
-
+  // Build CIP-68 mint transaction
   process.stderr.write("Building mint transaction...\n");
 
-  // MintNft redeemer = constructor index 0, no fields
-  const mintRedeemer = Data.to(new Constr(0, []));
+  const mintRedeemer = Data.to(new Constr(0, [])); // MintNft
+  const referenceDatum = Data.to(new Constr(0, [userEncrypted || ""]));
 
-  // CIP-68 reference datum: Constr 0 with userEncrypted bytes
-  // If no userEncrypted provided, use empty bytestring
-  const userEncryptedBytes = userEncrypted || "";
-  const referenceDatum = Data.to(new Constr(0, [userEncryptedBytes]));
+  const nowMs = Date.now();
 
-  // Reference token destination: deployer's own address (holds the CIP-68 reference NFT)
-  const refTokenAddress = deployerAddress;
-
-  const tx = lucid.newTx()
-    .mintAssets(
+  const txHash = await buildAndSubmitScriptTx({
+    provider,
+    walletAddress: deployerAddress,
+    scriptInputs: [],
+    outputs: [
+      // User token (222) → owner
       {
-        [policyId + userAssetName]: 1n,
-        [policyId + refAssetName]: 1n,
+        address: ownerWallet,
+        assets: { lovelace: 2_000_000n, [policyId + userAssetName]: 1n },
       },
-      mintRedeemer,
-    )
-    .attach.MintingPolicy(mintingPolicy)
-    .pay.ToAddress(ownerWallet, { [policyId + userAssetName]: 1n })
-    .pay.ToAddressWithData(
-      refTokenAddress,
-      { kind: "inline", value: referenceDatum },
-      { [policyId + refAssetName]: 1n },
-    )
-    .addSignerKey(serverKeyHash);
-
-  process.stderr.write("Completing transaction (coin selection, fee calculation)...\n");
-  const completed = await tx.complete();
-
-  process.stderr.write("Signing transaction...\n");
-  const signed = await completed.sign.withWallet().complete();
-
-  process.stderr.write("Submitting transaction...\n");
-  const txHash = await signed.submit();
+      // Reference token (100) → deployer with inline datum
+      {
+        address: deployerAddress,
+        assets: { lovelace: 2_000_000n, [policyId + refAssetName]: 1n },
+        datumCbor: referenceDatum,
+      },
+    ],
+    mints: [{
+      policyId,
+      assets: {
+        [userAssetName]: 1n,
+        [refAssetName]: 1n,
+      },
+      redeemerCbor: mintRedeemer,
+      scriptCbor: nftCompiledCode,
+    }],
+    validFrom: nowMs - 120_000,
+    validTo: nowMs + 600_000,
+    network: cfg.network,
+    requiredSigners: [serverKeyHash],
+    signingKey: new Uint8Array([...wallet.paymentKey]),
+  });
 
   process.stderr.write(`Transaction submitted: ${txHash}\n`);
-  process.stderr.write("Waiting for confirmation...\n");
-
-  const confirmed = await lucid.awaitTx(txHash);
-  if (confirmed) {
-    process.stderr.write(`Transaction confirmed on-chain: ${txHash}\n`);
-  } else {
-    process.stderr.write(`WARNING: awaitTx returned false for ${txHash} — tx may still be pending\n`);
-  }
-
-  // Print token ID to stdout — pipeline reads this
   process.stdout.write(`${tokenId}\n`);
 }
 

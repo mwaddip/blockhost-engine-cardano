@@ -14,8 +14,6 @@
   },
   "dependencies": {
     "@blockfrost/blockfrost-js": "^6.0.0",
-    "@lucid-evolution/lucid": "^0.4.29",
-    "@lucid-evolution/provider": "^0.1.90",
     "@noble/curves": "^1.8.0",
     "@noble/ed25519": "^3.0.0",
     "@noble/hashes": "^1.7.0",
