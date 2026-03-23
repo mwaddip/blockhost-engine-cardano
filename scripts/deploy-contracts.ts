@@ -160,7 +160,7 @@ async function main(): Promise<void> {
     ]);
     const utxos = parseKoiosUtxos(rawUtxos);
     const ttl = BigInt(tip.slot + 900);
-    const maxFee = 300000n;
+    const maxFee = 500000n;
 
     const { selected, inputTotal } = selectUtxos(utxos, { lovelace: minUtxo + maxFee });
 
@@ -205,34 +205,49 @@ async function main(): Promise<void> {
       return cborArray([body, ws, new Uint8Array([0xf5]), new Uint8Array([0xf6])]);
     }
 
-    // Iterative fee calculation
+    // Fee calculation + submit with retry
     let currentFee = maxFee;
-    let finalTx: Uint8Array | null = null;
+    // Pre-calculate fee from tx size
     for (let i = 0; i < 5; i++) {
       const tx = signTx(buildBody(currentFee));
       const neededFee = calculateFee(tx.length, pp);
-      if (neededFee <= currentFee) {
-        finalTx = tx;
-        break;
-      }
+      if (neededFee <= currentFee) break;
       currentFee = neededFee;
     }
-    if (!finalTx) finalTx = signTx(buildBody(currentFee));
 
-    try {
-      const txHash = await provider.submitTx(bytesToHex(finalTx));
-      process.stderr.write(`  Deployed: ${txHash}#0\n`);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes("already been included") || msg.includes("BadInputsUTxO")) {
-        process.stderr.write(`  Already deployed (skipping)\n`);
-      } else {
+    let deployed = false;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const tx = signTx(buildBody(currentFee));
+        const txHash = await provider.submitTx(bytesToHex(tx));
+        process.stderr.write(`  Deployed: ${txHash}#0\n`);
+        deployed = true;
+        break;
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes("already been included") || msg.includes("BadInputsUTxO")) {
+          process.stderr.write(`  Already deployed (skipping)\n`);
+          deployed = true;
+          break;
+        }
+        if (msg.includes("FeeTooSmall")) {
+          // Extract needed fee from error and retry
+          const match = msg.match(/Coin (\d+)\) \(Coin (\d+)\)/);
+          if (match) {
+            currentFee = BigInt(match[1]!) + 1000n; // use the min fee + margin
+            process.stderr.write(`  Fee too low, retrying with ${currentFee}...\n`);
+            continue;
+          }
+        }
         process.stderr.write(`  Failed: ${msg.slice(0, 300)}\n`);
-        process.exit(1);
+        break;
       }
     }
-    // Always emit the hash — the script hash is deterministic from compiledCode
+    // Always emit the hash — deterministic from compiledCode regardless of deployment
     process.stdout.write(`${target.key}=${validator.hash}\n`);
+    if (!deployed) {
+      process.stderr.write(`  WARNING: could not deploy on-chain, but hash is correct\n`);
+    }
 
     // Wait between deploys for UTXO indexing
     if (targets.indexOf(target) < targets.length - 1) {
