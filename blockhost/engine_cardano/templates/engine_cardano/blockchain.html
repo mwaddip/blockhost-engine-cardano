@@ -114,10 +114,25 @@
                            value="{{ blockchain.get('deployer_address', '') }}">
 
                     <div style="margin-top: 1rem; padding: 1rem; background: var(--bg-secondary); border-radius: 4px;">
-                        <p style="font-size: 0.875rem; margin: 0;">
-                            Fund this address with ADA before proceeding to validator deployment.
-                            At least <strong>10 ADA</strong> is recommended to cover transaction fees.
+                        <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 0.75rem;">
+                            <label style="margin: 0;">Balance:</label>
+                            <span id="wallet-balance" style="font-size: 1.25rem; font-weight: 500;">—</span>
+                            <button type="button" class="btn btn-small btn-secondary" onclick="checkBalance('generate')">
+                                Refresh
+                            </button>
+                        </div>
+                        <p style="font-size: 0.875rem; margin: 0 0 0.75rem;">
+                            Fund this wallet with ADA to continue. At least <strong>10 ADA</strong> recommended.
                         </p>
+                        <div style="display: flex; gap: 0.5rem; align-items: center;">
+                            <input type="number" id="topup-amount" step="1" min="2" value="10" style="width: 6rem;">
+                            <span style="font-size: 0.875rem;">ADA</span>
+                            <button type="button" class="btn btn-small btn-primary"
+                                    onclick="topUpWallet('generate')" id="topup-btn">
+                                Fund via Wallet
+                            </button>
+                        </div>
+                        <div id="topup-status" class="text-muted mt-1" style="font-size: 0.75rem;"></div>
                     </div>
                 </div>
             </div>
@@ -137,6 +152,32 @@
                     Validate Mnemonic
                 </button>
                 <div id="import-status" class="hidden" style="margin-top: 0.5rem;"></div>
+                <div id="import-funding" class="hidden" style="margin-top: 1rem; padding: 1rem; background: var(--bg-secondary); border-radius: 4px;">
+                    <label>Deployer Address</label>
+                    <div class="address-box" style="margin-bottom: 0.75rem;">
+                        <span id="import-deployer-address" style="font-family: monospace; word-break: break-all;">-</span>
+                        <button type="button" class="btn btn-small copy-btn" onclick="copyToClipboard('import-deployer-address', this)">Copy</button>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 0.75rem;">
+                        <label style="margin: 0;">Balance:</label>
+                        <span id="import-wallet-balance" style="font-size: 1.25rem; font-weight: 500;">—</span>
+                        <button type="button" class="btn btn-small btn-secondary" onclick="checkBalance('import')">
+                            Refresh
+                        </button>
+                    </div>
+                    <p style="font-size: 0.875rem; margin: 0 0 0.75rem;">
+                        Fund this wallet with ADA to continue. At least <strong>10 ADA</strong> recommended.
+                    </p>
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        <input type="number" id="import-topup-amount" step="1" min="2" value="10" style="width: 6rem;">
+                        <span style="font-size: 0.875rem;">ADA</span>
+                        <button type="button" class="btn btn-small btn-primary"
+                                onclick="topUpWallet('import')" id="import-topup-btn">
+                            Fund via Wallet
+                        </button>
+                    </div>
+                    <div id="import-topup-status" class="text-muted mt-1" style="font-size: 0.75rem;"></div>
+                </div>
             </div>
         </div>
 
@@ -364,6 +405,7 @@ function generateWallet() {
         document.getElementById('deployer-address-hidden').value = data.address;
         document.getElementById('wallet-generated').classList.remove('hidden');
         btn.textContent = 'Regenerate';
+        setTimeout(function() { checkBalance('generate'); }, 500);
     })
     .catch(function(err) {
         btn.disabled = false;
@@ -425,9 +467,12 @@ function validateImportMnemonic() {
     .then(function(data) {
         statusDiv.classList.remove('hidden');
         if (!data.error) {
-            statusDiv.innerHTML = '<div class="status-indicator success">Valid - Address: ' + data.address + '</div>';
+            statusDiv.innerHTML = '<div class="status-indicator success">Valid</div>';
             document.getElementById('deployer-mnemonic-hidden').value = data.mnemonic;
             document.getElementById('deployer-address-hidden').value = data.address;
+            document.getElementById('import-deployer-address').textContent = data.address;
+            document.getElementById('import-funding').classList.remove('hidden');
+            setTimeout(function() { checkBalance('import'); }, 500);
         } else {
             statusDiv.innerHTML = '<div class="status-indicator error">Invalid: ' + data.error + '</div>';
         }
@@ -496,6 +541,271 @@ document.getElementById('blockchain-form').addEventListener('submit', function(e
         }
     }
 });
+
+// ---- Koios URL helper ----
+function koiosUrl() {
+    var network = document.getElementById('network').value;
+    if (network === 'mainnet') return 'https://api.koios.rest/api/v1';
+    if (network === 'preview') return 'https://preview.koios.rest/api/v1';
+    return 'https://preprod.koios.rest/api/v1';
+}
+
+// ---- Balance check via Koios ----
+function checkBalance(mode) {
+    var addr = mode === 'generate'
+        ? document.getElementById('deployer-address').textContent.trim()
+        : document.getElementById('import-deployer-address').textContent.trim();
+    var balanceEl = document.getElementById(mode === 'generate' ? 'wallet-balance' : 'import-wallet-balance');
+    if (!addr || addr === '-') { balanceEl.textContent = '—'; return; }
+
+    balanceEl.textContent = '...';
+    fetch(koiosUrl() + '/address_info', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ _addresses: [addr] })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+        if (data && data[0] && data[0].balance) {
+            var ada = (parseInt(data[0].balance) / 1000000).toFixed(2);
+            balanceEl.textContent = ada + ' ADA';
+        } else {
+            balanceEl.textContent = '0 ADA';
+        }
+    })
+    .catch(function() { balanceEl.textContent = 'Error'; });
+}
+
+// ---- Hex / bytes helpers ----
+function hexToBytes(hex) {
+    hex = hex.replace(/^0x/, '');
+    var out = new Uint8Array(hex.length / 2);
+    for (var i = 0; i < out.length; i++) out[i] = parseInt(hex.substr(i * 2, 2), 16);
+    return out;
+}
+
+function bytesToHex(bytes) {
+    return Array.from(bytes).map(function(b) { return b.toString(16).padStart(2, '0'); }).join('');
+}
+
+function concatBytes(arrays) {
+    var total = 0;
+    for (var i = 0; i < arrays.length; i++) total += arrays[i].length;
+    var result = new Uint8Array(total);
+    var offset = 0;
+    for (var i = 0; i < arrays.length; i++) { result.set(arrays[i], offset); offset += arrays[i].length; }
+    return result;
+}
+
+// ---- Minimal CBOR encoder ----
+function cborHeader(major, n) {
+    var mt = major << 5;
+    n = typeof n === 'bigint' ? n : BigInt(n);
+    if (n < 24n) return new Uint8Array([mt | Number(n)]);
+    if (n < 256n) return new Uint8Array([mt | 24, Number(n)]);
+    if (n < 65536n) {
+        var b = new Uint8Array(3); b[0] = mt | 25;
+        b[1] = Number((n >> 8n) & 0xFFn); b[2] = Number(n & 0xFFn); return b;
+    }
+    if (n < 4294967296n) {
+        var b = new Uint8Array(5); b[0] = mt | 26;
+        b[1] = Number((n >> 24n) & 0xFFn); b[2] = Number((n >> 16n) & 0xFFn);
+        b[3] = Number((n >> 8n) & 0xFFn); b[4] = Number(n & 0xFFn); return b;
+    }
+    var b = new Uint8Array(9); b[0] = mt | 27;
+    for (var i = 7; i >= 0; i--) b[8 - i] = Number((n >> BigInt(i * 8)) & 0xFFn);
+    return b;
+}
+function cborUint(n) { return cborHeader(0, n); }
+function cborBytes(bytes) {
+    if (typeof bytes === 'string') bytes = hexToBytes(bytes);
+    return concatBytes([cborHeader(2, bytes.length), bytes]);
+}
+function cborArray(items) { return concatBytes([cborHeader(4, items.length)].concat(items)); }
+function cborMap(entries) {
+    var parts = [cborHeader(5, entries.length)];
+    for (var i = 0; i < entries.length; i++) { parts.push(entries[i][0]); parts.push(entries[i][1]); }
+    return concatBytes(parts);
+}
+function cborTag(tagNum, content) { return concatBytes([cborHeader(6, tagNum), content]); }
+
+// ---- Minimal CBOR decoder (for CIP-30 UTXOs) ----
+function decodeCbor(bytes, pos) {
+    var initial = bytes[pos]; var major = initial >> 5; var additional = initial & 0x1F; pos++;
+    var argVal;
+    if (additional < 24) argVal = BigInt(additional);
+    else if (additional === 24) argVal = BigInt(bytes[pos++]);
+    else if (additional === 25) { argVal = BigInt(bytes[pos] << 8 | bytes[pos + 1]); pos += 2; }
+    else if (additional === 26) { argVal = BigInt((bytes[pos] << 24 | bytes[pos + 1] << 16 | bytes[pos + 2] << 8 | bytes[pos + 3]) >>> 0); pos += 4; }
+    else if (additional === 27) { argVal = 0n; for (var i = 0; i < 8; i++) argVal = (argVal << 8n) | BigInt(bytes[pos + i]); pos += 8; }
+    else if (additional === 31) argVal = -1n;
+    else throw new Error('CBOR: unsupported additional ' + additional);
+    switch (major) {
+        case 0: return { value: argVal, offset: pos };
+        case 1: return { value: -1n - argVal, offset: pos };
+        case 2: if (argVal < 0n) throw new Error('CBOR: indefinite bytes'); var len = Number(argVal); return { value: bytes.slice(pos, pos + len), offset: pos + len };
+        case 3: if (argVal < 0n) throw new Error('CBOR: indefinite text'); var tl = Number(argVal); return { value: new TextDecoder().decode(bytes.slice(pos, pos + tl)), offset: pos + tl };
+        case 4: var arr = []; if (argVal < 0n) { while (bytes[pos] !== 0xFF) { var it = decodeCbor(bytes, pos); arr.push(it.value); pos = it.offset; } pos++; } else { for (var i = 0; i < Number(argVal); i++) { var it = decodeCbor(bytes, pos); arr.push(it.value); pos = it.offset; } } return { value: arr, offset: pos };
+        case 5: var map = new Map(); if (argVal < 0n) { while (bytes[pos] !== 0xFF) { var k = decodeCbor(bytes, pos); var v = decodeCbor(bytes, k.offset); map.set(k.value, v.value); pos = v.offset; } pos++; } else { for (var i = 0; i < Number(argVal); i++) { var k = decodeCbor(bytes, pos); var v = decodeCbor(bytes, k.offset); map.set(k.value, v.value); pos = v.offset; } } return { value: map, offset: pos };
+        case 6: var tagged = decodeCbor(bytes, pos); return { value: tagged.value, offset: tagged.offset };
+        case 7: if (argVal === 20n) return { value: false, offset: pos }; if (argVal === 21n) return { value: true, offset: pos }; if (argVal === 22n) return { value: null, offset: pos }; return { value: Number(argVal), offset: pos };
+        default: throw new Error('CBOR: unsupported major ' + major);
+    }
+}
+
+// ---- Parse CIP-30 UTXO (CBOR hex → { txHash, index, lovelace }) ----
+function parseCip30Utxo(cborHex) {
+    try {
+        var decoded = decodeCbor(hexToBytes(cborHex), 0);
+        var pair = decoded.value;
+        if (!Array.isArray(pair) || pair.length < 2) return null;
+        var input = pair[0];
+        if (!Array.isArray(input) || input.length < 2) return null;
+        var txHash = input[0] instanceof Uint8Array ? bytesToHex(input[0]) : input[0];
+        var output = pair[1];
+        var lovelace = 0n;
+        if (Array.isArray(output)) {
+            var val = output[1];
+            lovelace = (typeof val === 'bigint' || typeof val === 'number') ? BigInt(val) : (Array.isArray(val) ? BigInt(val[0]) : 0n);
+        } else if (output instanceof Map) {
+            // Post-Babbage map: keys are bigint (0n=address, 1n=value)
+            var val = output.has(1n) ? output.get(1n) : output.get(1);
+            lovelace = (typeof val === 'bigint' || typeof val === 'number') ? BigInt(val) : (Array.isArray(val) ? BigInt(val[0]) : 0n);
+        }
+        return { txHash: txHash, index: Number(input[1]), lovelace: lovelace };
+    } catch (e) { return null; }
+}
+
+// ---- Bech32 → raw hex (for CBOR address encoding) ----
+function bech32ToHex(addr) {
+    var CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
+    var sep = addr.lastIndexOf('1');
+    var data = [];
+    for (var i = sep + 1; i < addr.length; i++) {
+        var v = CHARSET.indexOf(addr.charAt(i));
+        if (v === -1) throw new Error('Invalid bech32');
+        data.push(v);
+    }
+    data = data.slice(0, -6); // remove checksum
+    var acc = 0, bits = 0, result = [];
+    for (var j = 0; j < data.length; j++) {
+        acc = (acc << 5) | data[j]; bits += 5;
+        while (bits >= 8) { bits -= 8; result.push((acc >> bits) & 0xff); }
+    }
+    return result.map(function(b) { return b.toString(16).padStart(2, '0'); }).join('');
+}
+
+// ---- CIP-30 topup transaction ----
+async function topUpWallet(mode) {
+    var deployerAddr = mode === 'generate'
+        ? document.getElementById('deployer-address').textContent.trim()
+        : document.getElementById('import-deployer-address').textContent.trim();
+    var amountInput = document.getElementById(mode === 'generate' ? 'topup-amount' : 'import-topup-amount');
+    var statusEl = document.getElementById(mode === 'generate' ? 'topup-status' : 'import-topup-status');
+    var btn = document.getElementById(mode === 'generate' ? 'topup-btn' : 'import-topup-btn');
+
+    var lovelace = BigInt(Math.floor(parseFloat(amountInput.value) * 1000000));
+    if (!deployerAddr || deployerAddr === '-') { statusEl.textContent = 'Generate wallet first'; return; }
+    if (lovelace < 2000000n) { statusEl.textContent = 'Minimum 2 ADA'; return; }
+
+    if (!window.cardano) { statusEl.textContent = 'No Cardano wallet detected'; return; }
+    var KNOWN = ['eternl', 'nami', 'lace', 'flint', 'typhon', 'yoroi', 'gerowallet', 'nufi'];
+    var walletName = null;
+    for (var k = 0; k < KNOWN.length; k++) {
+        if (window.cardano[KNOWN[k]] && typeof window.cardano[KNOWN[k]].enable === 'function') {
+            walletName = KNOWN[k]; break;
+        }
+    }
+    if (!walletName) {
+        var keys = Object.keys(window.cardano);
+        for (var k = 0; k < keys.length; k++) {
+            if (window.cardano[keys[k]] && typeof window.cardano[keys[k]].enable === 'function') {
+                walletName = keys[k]; break;
+            }
+        }
+    }
+    if (!walletName) { statusEl.textContent = 'No CIP-30 wallet found'; return; }
+
+    btn.disabled = true;
+    statusEl.textContent = 'Connecting to ' + (window.cardano[walletName].name || walletName) + '...';
+
+    try {
+        var api = await window.cardano[walletName].enable();
+
+        var utxoHexList = await api.getUtxos();
+        var changeAddrHex = await api.getChangeAddress();
+        if (!utxoHexList || !utxoHexList.length) throw new Error('No UTXOs in wallet');
+
+        var utxos = utxoHexList.map(parseCip30Utxo).filter(Boolean);
+
+        // Coin selection
+        var estimatedFee = 200000n;
+        var target = lovelace + estimatedFee;
+        var selected = []; var inputTotal = 0n;
+        for (var i = 0; i < utxos.length && inputTotal < target; i++) {
+            if (utxos[i].lovelace > 0n) { selected.push(utxos[i]); inputTotal += utxos[i].lovelace; }
+        }
+        if (inputTotal < target) throw new Error('Insufficient ADA (' + (Number(inputTotal) / 1e6).toFixed(2) + ' available)');
+
+        var changeLovelace = inputTotal - lovelace - estimatedFee;
+        var deployerAddrHex = bech32ToHex(deployerAddr);
+
+        // Sort inputs lexicographically (Conway requirement)
+        selected.sort(function(a, b) {
+            if (a.txHash < b.txHash) return -1;
+            if (a.txHash > b.txHash) return 1;
+            return a.index - b.index;
+        });
+
+        var inputsCbor = cborTag(258, cborArray(selected.map(function(u) {
+            return cborArray([cborBytes(hexToBytes(u.txHash)), cborUint(BigInt(u.index))]);
+        })));
+
+        var outputs = [
+            cborMap([[cborUint(0n), cborBytes(hexToBytes(deployerAddrHex))], [cborUint(1n), cborUint(lovelace)]])
+        ];
+        if (changeLovelace >= 1000000n) {
+            outputs.push(cborMap([[cborUint(0n), cborBytes(hexToBytes(changeAddrHex))], [cborUint(1n), cborUint(changeLovelace)]]));
+        }
+
+        // Get current slot for TTL
+        statusEl.textContent = 'Building transaction...';
+        var tipResp = await fetch(koiosUrl() + '/tip');
+        var tip = await tipResp.json();
+        var ttl = BigInt(parseInt(tip[0].abs_slot) + 900);
+
+        var txBody = cborMap([
+            [cborUint(0n), inputsCbor],
+            [cborUint(1n), cborArray(outputs)],
+            [cborUint(2n), cborUint(estimatedFee)],
+            [cborUint(3n), cborUint(ttl)]
+        ]);
+
+        // Unsigned tx: [body, witness_set{}, true, null]
+        var unsignedTx = cborArray([txBody, cborMap([]), new Uint8Array([0xf5]), new Uint8Array([0xf6])]);
+        var txHex = bytesToHex(unsignedTx);
+
+        statusEl.textContent = 'Confirm in wallet...';
+        var witnessHex = await api.signTx(txHex, true);
+
+        // Replace empty witness set with signed witnesses
+        var signedTx = cborArray([txBody, hexToBytes(witnessHex), new Uint8Array([0xf5]), new Uint8Array([0xf6])]);
+        var signedTxHex = bytesToHex(signedTx);
+
+        statusEl.textContent = 'Submitting...';
+        var txHash = await api.submitTx(signedTxHex);
+
+        statusEl.innerHTML = 'Sent! tx: <code style="font-size: 0.7rem;">' + txHash.slice(0, 16) + '...</code> — click Refresh after ~20s';
+        btn.disabled = false;
+    } catch (e) {
+        btn.disabled = false;
+        if (e.code === 2 || (e.info && e.info.indexOf('User') !== -1) || (e.message && e.message.indexOf('declined') !== -1)) {
+            statusEl.textContent = 'Cancelled by user.';
+        } else {
+            statusEl.textContent = 'Error: ' + (e.message || e.info || e);
+        }
+    }
+}
 
 // Initialize radio button styling
 document.querySelectorAll('input[type="radio"]:checked').forEach(function(radio) {
