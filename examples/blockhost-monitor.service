@@ -10,7 +10,7 @@ User=blockhost
 Group=blockhost
 Environment=HOME=/var/lib/blockhost
 EnvironmentFile=-/etc/blockhost/blockhost-env
-ExecStart=/usr/bin/node /usr/share/blockhost/monitor.js
+ExecStart=/usr/share/blockhost/node_modules/.bin/tsx /usr/share/blockhost/src/monitor/index.ts
 Restart=always
 RestartSec=10
 StandardOutput=journal
