@@ -19,6 +19,9 @@ import {
   hexToBytes,
   bytesToHex,
 } from "./cbor.js";
+import {
+  cborHeader,
+} from "./cbor.js";
 import type { CardanoProvider, ProtocolParams } from "./provider.js";
 import { PrivateKey } from "noble-bip32ed25519";
 import { blake2b } from "@noble/hashes/blake2b";
@@ -368,4 +371,340 @@ export async function buildAndSubmitTransfer(params: {
   // 6. Submit
   const txHash = await provider.submitTx(bytesToHex(finalTx));
   return txHash;
+}
+
+// ── Script transaction builder ──────────────────────────────────────────────
+
+/** A script input to spend from a validator. */
+export interface ScriptInput {
+  utxo: Utxo;
+  /** Address the UTXO sits at (bech32) */
+  address: string;
+  /** Redeemer CBOR hex (from Data.to()) */
+  redeemerCbor: string;
+}
+
+/** An output with an optional inline datum. */
+export interface TxOutput {
+  address: string;
+  assets: Assets;
+  /** Inline datum CBOR hex (from Data.to()) — omit for plain outputs */
+  datumCbor?: string;
+}
+
+/** Mint/burn entry. */
+export interface MintEntry {
+  policyId: string;
+  assets: Record<string, bigint>; // assetNameHex → quantity (negative to burn)
+  redeemerCbor: string;
+  /** PlutusV3 script CBOR hex (from plutus.json compiledCode) */
+  scriptCbor: string;
+}
+
+/**
+ * Build, sign, and submit a transaction with script inputs, datums, minting.
+ *
+ * Handles: script spending, redeemers, inline datums, minting/burning,
+ * validity ranges, required signers, two-pass fee calculation.
+ */
+export async function buildAndSubmitScriptTx(params: {
+  provider: CardanoProvider;
+  /** Wallet UTXOs for fee/collateral (bech32 address) */
+  walletAddress: string;
+  /** Script inputs to spend (with redeemers) */
+  scriptInputs: ScriptInput[];
+  /** All outputs (recipient, continuing, change handled automatically) */
+  outputs: TxOutput[];
+  /** Minting/burning entries */
+  mints?: MintEntry[];
+  /** PlutusV3 spending validator CBOR hex (from plutus.json compiledCode) */
+  spendingScriptCbor?: string;
+  /** Validity range (POSIX ms) */
+  validFrom?: number;
+  validTo?: number;
+  /** Required signer key hashes (hex) */
+  requiredSigners?: string[];
+  /** 64-byte signing key (kL + kR) */
+  signingKey: Uint8Array;
+}): Promise<string> {
+  const {
+    provider, walletAddress, scriptInputs, outputs,
+    mints, spendingScriptCbor, validFrom, validTo,
+    requiredSigners, signingKey,
+  } = params;
+
+  const kL = signingKey.slice(0, 32);
+  const kR = signingKey.slice(32, 64);
+
+  // 1. Fetch wallet UTXOs and protocol params
+  const [rawWalletUtxos, pp] = await Promise.all([
+    provider.fetchUtxos(walletAddress),
+    provider.fetchProtocolParams(),
+  ]);
+  const walletUtxos = parseKoiosUtxos(rawWalletUtxos);
+
+  const validFromSlot = validFrom !== undefined ? BigInt(validFrom) : undefined;
+  const validToSlot = BigInt(validTo ?? (Date.now() + 600_000));
+
+  // 2. Calculate how much ADA the outputs need
+  let outputLovelace = 0n;
+  for (const out of outputs) {
+    outputLovelace += out.assets.lovelace;
+  }
+
+  // Script inputs contribute ADA
+  let scriptInputLovelace = 0n;
+  for (const si of scriptInputs) {
+    scriptInputLovelace += si.utxo.lovelace;
+  }
+
+  // We need wallet UTXOs for: fee + collateral + any ADA shortfall
+  const maxFee = 500000n;
+  const collateralAmount = maxFee * 3n / 2n; // 150% of fee
+  const adaNeeded = outputLovelace > scriptInputLovelace
+    ? outputLovelace - scriptInputLovelace + maxFee + collateralAmount
+    : maxFee + collateralAmount;
+
+  const { selected: walletSelected, inputTotal: walletInputTotal } = selectUtxos(
+    walletUtxos,
+    { lovelace: adaNeeded },
+  );
+
+  // 3. Build the transaction body fields
+
+  // All inputs: script inputs + wallet inputs, sorted
+  const allInputs: Utxo[] = [
+    ...scriptInputs.map(si => si.utxo),
+    ...walletSelected,
+  ];
+  const sortedInputs = sortInputs(allInputs);
+
+  // Build outputs CBOR
+  function buildAllOutputs(fee: bigint): Uint8Array[] {
+    const outs: Uint8Array[] = [];
+
+    // Explicit outputs
+    for (const out of outputs) {
+      const addrHex = addressToHex(out.address);
+      const hasTokens = Object.keys(out.assets).some(u => u !== "lovelace");
+      const tokenEntries = Object.entries(out.assets).filter(([u]) => u !== "lovelace");
+
+      if (out.datumCbor) {
+        // Output with inline datum (post-Babbage map format)
+        const addrField: [Uint8Array, Uint8Array] = [cborUint(0n), cborBytes(hexToBytes(addrHex))];
+        const valueField: [Uint8Array, Uint8Array] = hasTokens
+          ? [cborUint(1n), cborArray([cborUint(out.assets.lovelace), buildMultiAssetCbor(tokenEntries)])]
+          : [cborUint(1n), cborUint(out.assets.lovelace)];
+        // Datum option: [1, datum_cbor] where 1 = inline datum (tag 24 for CBOR-in-CBOR)
+        const datumBytes = hexToBytes(out.datumCbor);
+        const datumField: [Uint8Array, Uint8Array] = [
+          cborUint(2n),
+          cborArray([cborUint(1n), cborTag(24, cborBytes(datumBytes))]),
+        ];
+        outs.push(cborMap([addrField, valueField, datumField]));
+      } else {
+        outs.push(buildOutputCbor(addrHex, out.assets.lovelace,
+          hasTokens ? tokenEntries : undefined));
+      }
+    }
+
+    // Change output (wallet gets back its excess)
+    const totalInputLv = scriptInputLovelace + walletInputTotal.lovelace;
+    const changeLv = totalInputLv - outputLovelace - fee;
+    if (changeLv >= 1000000n) {
+      outs.push(buildOutputCbor(addressToHex(walletAddress), changeLv));
+    }
+
+    return outs;
+  }
+
+  // Script input indices (position in sorted inputs) for redeemers
+  function scriptInputIndex(utxo: Utxo): number {
+    return sortedInputs.findIndex(
+      u => u.txHash === utxo.txHash && u.index === utxo.index,
+    );
+  }
+
+  // Build redeemers: array of [tag, index, data, ex_units]
+  // tag 0 = spend, tag 1 = mint
+  function buildRedeemers(): Uint8Array {
+    const entries: Uint8Array[] = [];
+
+    // Spend redeemers
+    for (const si of scriptInputs) {
+      const idx = scriptInputIndex(si.utxo);
+      entries.push(cborArray([
+        cborUint(0n), // tag: spend
+        cborUint(BigInt(idx)),
+        cborBytes(hexToBytes(si.redeemerCbor)), // wrapped as bytes — will be unwrapped below
+        cborArray([cborUint(14000000n), cborUint(10000000000n)]), // ex_units (budget)
+      ]));
+    }
+
+    // Mint redeemers
+    if (mints) {
+      // Mint redeemer index is the position of the policy in the sorted mint map
+      const sortedPolicies = mints.map(m => m.policyId).sort();
+      for (const m of mints) {
+        const idx = sortedPolicies.indexOf(m.policyId);
+        entries.push(cborArray([
+          cborUint(1n), // tag: mint
+          cborUint(BigInt(idx)),
+          cborBytes(hexToBytes(m.redeemerCbor)),
+          cborArray([cborUint(14000000n), cborUint(10000000000n)]),
+        ]));
+      }
+    }
+
+    return cborMap(entries.map((e, i) => [cborUint(BigInt(i)), e]));
+  }
+
+  // Build Plutus script witnesses (field 6 in witness set)
+  function buildScriptWitnesses(): Uint8Array[] {
+    const scripts: Uint8Array[] = [];
+    // Spending validator
+    if (spendingScriptCbor) {
+      // PlutusV3 script: [3, script_bytes]  (3 = PlutusV3 language tag)
+      scripts.push(cborArray([cborUint(3n), cborBytes(hexToBytes(spendingScriptCbor))]));
+    }
+    // Minting policies
+    if (mints) {
+      for (const m of mints) {
+        scripts.push(cborArray([cborUint(3n), cborBytes(hexToBytes(m.scriptCbor))]));
+      }
+    }
+    return scripts;
+  }
+
+  // Build full transaction body
+  function buildFullTxBody(fee: bigint): Uint8Array {
+    const outs = buildAllOutputs(fee);
+    const bodyFields: [Uint8Array, Uint8Array][] = [
+      [cborUint(0n), buildInputsCbor(sortedInputs)],
+      [cborUint(1n), cborArray(outs)],
+      [cborUint(2n), cborUint(fee)],
+    ];
+
+    // TTL (field 3) — use validTo as slot
+    bodyFields.push([cborUint(3n), cborUint(validToSlot)]);
+
+    // Mint (field 9)
+    if (mints && mints.length > 0) {
+      const mintEntries: [string, bigint][] = [];
+      for (const m of mints) {
+        for (const [assetName, qty] of Object.entries(m.assets)) {
+          mintEntries.push([m.policyId + assetName, qty]);
+        }
+      }
+      // Build mint map — need to handle negative quantities for burns
+      const byPolicy = new Map<string, [string, bigint][]>();
+      for (const [unit, qty] of mintEntries) {
+        const pid = unit.slice(0, 56);
+        const aname = unit.slice(56);
+        let list = byPolicy.get(pid);
+        if (!list) { list = []; byPolicy.set(pid, list); }
+        list.push([aname, qty]);
+      }
+      const policyEntries: [Uint8Array, Uint8Array][] = [];
+      for (const [pid, assets] of byPolicy) {
+        const assetEntries: [Uint8Array, Uint8Array][] = assets.map(([name, qty]) => [
+          cborBytes(hexToBytes(name)),
+          qty >= 0n ? cborUint(qty) : cborHeader(1, -qty - 1n),
+        ]);
+        policyEntries.push([cborBytes(hexToBytes(pid)), cborMap(assetEntries)]);
+      }
+      bodyFields.push([cborUint(9n), cborMap(policyEntries)]);
+    }
+
+    // Collateral (field 13) — use the first wallet UTXO
+    if (scriptInputs.length > 0 && walletSelected.length > 0) {
+      const collUtxo = walletSelected[0]!;
+      bodyFields.push([
+        cborUint(13n),
+        cborTag(258, cborArray([
+          cborArray([cborBytes(hexToBytes(collUtxo.txHash)), cborUint(BigInt(collUtxo.index))]),
+        ])),
+      ]);
+      // Total collateral (field 17)
+      const totalColl = fee * 3n / 2n;
+      bodyFields.push([cborUint(17n), cborUint(totalColl)]);
+    }
+
+    // Required signers (field 14)
+    if (requiredSigners && requiredSigners.length > 0) {
+      bodyFields.push([
+        cborUint(14n),
+        cborTag(258, cborArray(requiredSigners.map(h => cborBytes(hexToBytes(h))))),
+      ]);
+    }
+
+    // Validity start (field 8) — POSIX ms
+    if (validFromSlot !== undefined) {
+      bodyFields.push([cborUint(8n), cborUint(validFromSlot)]);
+    }
+
+    // Sort body fields by key for canonical CBOR
+    bodyFields.sort((a, b) => {
+      const ka = a[0]!;
+      const kb = b[0]!;
+      if (ka.length !== kb.length) return ka.length - kb.length;
+      for (let i = 0; i < ka.length; i++) {
+        if (ka[i]! !== kb[i]!) return ka[i]! - kb[i]!;
+      }
+      return 0;
+    });
+
+    return cborMap(bodyFields);
+  }
+
+  // Build full witness set
+  function buildFullWitnessSet(txBodyHash: Uint8Array): Uint8Array {
+    const privKey = new PrivateKey(kL, kR);
+    const signature = privKey.sign(txBodyHash);
+    const pubKeyBytes = privKey.toPublicKey().toBytes();
+
+    const witnessFields: [Uint8Array, Uint8Array][] = [];
+
+    // VKey witnesses (field 0)
+    const vkeyWitness = cborArray([cborBytes(pubKeyBytes), cborBytes(signature)]);
+    witnessFields.push([cborUint(0n), cborArray([vkeyWitness])]);
+
+    // Plutus scripts (field 6) — PlutusV3
+    const scriptWitnesses = buildScriptWitnesses();
+    if (scriptWitnesses.length > 0) {
+      witnessFields.push([cborUint(6n), cborArray(scriptWitnesses)]);
+    }
+
+    // Redeemers (field 5)
+    if (scriptInputs.length > 0 || (mints && mints.length > 0)) {
+      witnessFields.push([cborUint(5n), buildRedeemers()]);
+    }
+
+    return cborMap(witnessFields);
+  }
+
+  // 4. Two-pass fee calculation
+  const firstBody = buildFullTxBody(maxFee);
+  const firstHash = blake2b(firstBody, { dkLen: 32 });
+  const firstWitness = buildFullWitnessSet(firstHash);
+  const firstTx = assembleTx(firstBody, firstWitness);
+
+  const exactFee = calculateFee(firstTx.length, pp);
+
+  const finalBody = buildFullTxBody(exactFee);
+  const finalHash = blake2b(finalBody, { dkLen: 32 });
+  const finalWitness = buildFullWitnessSet(finalHash);
+  const finalTx = assembleTx(finalBody, finalWitness);
+
+  // Verify fee covers final size
+  const verifyFee = calculateFee(finalTx.length, pp);
+  if (verifyFee > exactFee) {
+    const safeBody = buildFullTxBody(verifyFee);
+    const safeHash = blake2b(safeBody, { dkLen: 32 });
+    const safeWitness = buildFullWitnessSet(safeHash);
+    const safeTx = assembleTx(safeBody, safeWitness);
+    return provider.submitTx(bytesToHex(safeTx));
+  }
+
+  return provider.submitTx(bytesToHex(finalTx));
 }

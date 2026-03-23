@@ -11,17 +11,23 @@
  *   - Burns beacon tokens for fully consumed subscriptions
  *   - Sends collected funds to the specified recipient
  *
- * Uses Lucid Evolution for transaction building and submission.
+ * Uses the minimal tx toolkit (src/cardano/) — no Lucid.
  * Core function executeWithdraw() is used by fund-manager.
  */
 
-import { Constr, Data } from "@lucid-evolution/lucid";
-import type { UTxO } from "@lucid-evolution/lucid";
 import type { Addressbook } from "../../fund-manager/types.js";
 import type { SubscriptionDatum } from "../../cardano/types.js";
 import { resolveAddress } from "../cli-utils.js";
-import { initLucidWithWallet } from "../lucid-helpers.js";
 import { loadWeb3Config } from "../../fund-manager/web3-config.js";
+import { getProvider } from "../../cardano/provider.js";
+import { deriveWallet } from "../../cardano/wallet.js";
+import { getPaymentKeyHash } from "../../cardano/address.js";
+import { Constr, Data } from "../../cardano/data.js";
+import {
+  parseKoiosUtxos,
+  buildAndSubmitScriptTx,
+} from "../../cardano/tx.js";
+import type { Utxo, ScriptInput, TxOutput, MintEntry, Assets } from "../../cardano/tx.js";
 import * as fs from "fs";
 
 const CONFIG_DIR = process.env["BLOCKHOST_CONFIG_DIR"] ?? "/etc/blockhost";
@@ -31,21 +37,16 @@ const MAX_BATCH = 15; // max UTXOs per transaction to stay within limits
 // ── Datum codec ──────────────────────────────────────────────────────────────
 
 /**
- * Decode a SubscriptionDatum from CBOR (inline datum).
- * Aiken Constr(0, [plan_id, expiry_slot, subscriber_key_hash, amount_remaining,
- *   rate_per_interval, interval_slots, last_collected_slot,
- *   Constr(0, [policy_id, asset_name]), beacon_policy_id, user_encrypted])
+ * Decode a SubscriptionDatum from CBOR hex (inline datum).
  */
 function decodeSubscriptionDatum(cborHex: string): SubscriptionDatum | null {
   try {
-    const d = Data.from(cborHex) as Constr<
-      bigint | string | Constr<string>
-    >;
+    const d = Data.from(cborHex);
     if (!(d instanceof Constr) || d.index !== 0 || d.fields.length < 10) {
       return null;
     }
     const f = d.fields;
-    const paymentAssetConstr = f[7] as Constr<string>;
+    const paymentAssetConstr = f[7] as Constr;
     return {
       planId: Number(f[0] as bigint),
       expiry: f[1] as bigint,
@@ -67,7 +68,7 @@ function decodeSubscriptionDatum(cborHex: string): SubscriptionDatum | null {
 }
 
 /**
- * Encode a SubscriptionDatum back to CBOR hex for the continuing output.
+ * Encode a SubscriptionDatum to CBOR hex for the continuing output.
  */
 function encodeSubscriptionDatum(datum: SubscriptionDatum): string {
   const d = new Constr(0, [
@@ -88,45 +89,41 @@ function encodeSubscriptionDatum(datum: SubscriptionDatum): string {
 // ── Claimability logic ───────────────────────────────────────────────────────
 
 interface ClaimableInfo {
-  utxo: UTxO;
+  utxo: Utxo;
+  address: string;
   datum: SubscriptionDatum;
-  /** Number of full intervals elapsed since last collection */
   intervals: bigint;
-  /** Amount to collect this cycle */
   collectAmount: bigint;
-  /** Whether this collection fully exhausts the subscription */
   fullyConsumed: boolean;
 }
 
 /**
  * Analyze a subscription UTXO for claimability.
- * @param validFromMs POSIX ms that will be used as tx validFrom (= what the validator sees as tx_lower_bound)
  */
 function analyzeClaimable(
-  utxo: UTxO,
+  utxo: Utxo,
+  address: string,
+  datumCbor: string | undefined,
   validFromMs: bigint,
 ): ClaimableInfo | null {
-  if (!utxo.datum) return null;
-  const datum = decodeSubscriptionDatum(utxo.datum);
+  if (!datumCbor) return null;
+  const datum = decodeSubscriptionDatum(datumCbor);
   if (!datum) return null;
 
-  // Skip fully consumed subscriptions (nothing left to collect)
   if (datum.amountRemaining <= 0n) return null;
 
-  // How many full intervals since last collection?
   const elapsed = validFromMs - datum.lastCollected;
-  if (elapsed < datum.intervalMs) return null; // not yet claimable
+  if (elapsed < datum.intervalMs) return null;
 
   const intervals = elapsed / datum.intervalMs;
   let collectAmount = intervals * datum.ratePerInterval;
 
-  // Cap at amount remaining
   const fullyConsumed = collectAmount >= datum.amountRemaining;
   if (fullyConsumed) {
     collectAmount = datum.amountRemaining;
   }
 
-  return { utxo, datum, intervals, collectAmount, fullyConsumed };
+  return { utxo, address, datum, intervals, collectAmount, fullyConsumed };
 }
 
 // ── Load validator script ────────────────────────────────────────────────────
@@ -137,7 +134,6 @@ interface ValidatorInfo {
 }
 
 function loadValidatorScripts(): ValidatorInfo {
-  // Try project-local plutus.json first, fall back to config dir
   let plutusPath = "plutus.json";
   if (!fs.existsSync(plutusPath)) {
     plutusPath = PLUTUS_JSON_PATH;
@@ -172,9 +168,6 @@ function loadValidatorScripts(): ValidatorInfo {
 
 /**
  * Core withdraw operation — used by both CLI and fund-manager.
- *
- * @param toRole  Addressbook role or bech32 address to receive collected funds
- * @param book    Addressbook
  */
 export async function executeWithdraw(
   toRole: string,
@@ -183,43 +176,29 @@ export async function executeWithdraw(
   const toAddress = resolveAddress(toRole, book);
   const web3 = loadWeb3Config();
 
-  // Determine which role to sign with — prefer "server", fall back to first with keyfile
+  // Determine signing role
   const signingRole =
     book["server"]?.keyfile
       ? "server"
       : Object.entries(book).find(([, e]) => e.keyfile)?.[0];
-  if (!signingRole) {
-    throw new Error("No signing wallet available in addressbook");
-  }
+  if (!signingRole) throw new Error("No signing wallet available in addressbook");
 
-  const lucid = await initLucidWithWallet(signingRole, book);
-  const signerAddr = await lucid.wallet().address();
+  const signerEntry = book[signingRole]!;
+  const mnemonic = fs.readFileSync(signerEntry.keyfile!, "utf8").trim();
+  const wallet = await deriveWallet(mnemonic, web3.network);
+  const provider = getProvider(web3.network, web3.blockfrostProjectId);
 
-  // Find subscription UTXOs by scanning for beacon tokens.
-  // Subscriptions live at CIP-89 addresses (script payment + subscriber staking),
-  // so there's no single address to query. Instead we find all UTXOs holding
-  // any token under the beacon policy.
+  const serverKeyHash = getPaymentKeyHash(wallet.address);
+  if (!serverKeyHash) throw new Error("Could not extract payment key hash from signer address");
+
+  // Find subscription UTXOs by scanning for beacon tokens
   const beaconPolicyId = web3.beaconPolicyId;
   console.error(`Scanning for beacon tokens (policy: ${beaconPolicyId.slice(0, 16)}...)...`);
 
-  // Query for all addresses holding beacon policy tokens via the configured provider
-  // Find all addresses holding any token under the beacon policy via Koios
   let beaconAddresses: string[] = [];
   try {
-    // Try fetching all assets under the beacon policy
-    const koiosUrl = web3.network === "mainnet"
-      ? "https://api.koios.rest/api/v1"
-      : web3.network === "preview"
-        ? "https://preview.koios.rest/api/v1"
-        : "https://preprod.koios.rest/api/v1";
-
-    const holders = await fetch(`${koiosUrl}/policy_asset_addresses`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ _asset_policy: beaconPolicyId }),
-    }).then(r => r.json() as Promise<Array<{ payment_address: string }>>);
-
-    beaconAddresses = [...new Set((holders || []).map(h => h.payment_address))];
+    const holders = await provider.fetchAssetAddresses(beaconPolicyId);
+    beaconAddresses = [...new Set(holders.map(h => h.address))];
   } catch {
     console.error("Failed to query beacon holders");
     return;
@@ -229,36 +208,44 @@ export async function executeWithdraw(
     console.log("No subscription UTXOs found (no beacon tokens on-chain).");
     return;
   }
-
   console.error(`Found beacons at ${beaconAddresses.length} address(es)`);
 
-  const utxos: UTxO[] = [];
+  // Fetch UTXOs at each beacon address
+  const allUtxos: Array<{ utxo: Utxo; address: string; datumCbor?: string }> = [];
   for (const addr of beaconAddresses) {
     try {
-      const addrUtxos = await lucid.utxosAt(addr);
-      for (const u of addrUtxos) {
-        const hasBeacon = Object.keys(u.assets).some(unit => unit.startsWith(beaconPolicyId));
-        if (hasBeacon) utxos.push(u);
+      const rawUtxos = await provider.fetchUtxos(addr);
+      const parsed = parseKoiosUtxos(rawUtxos);
+      for (let i = 0; i < parsed.length; i++) {
+        const u = parsed[i]!;
+        const hasBeacon = Object.keys(u.tokens).some(unit => unit.startsWith(beaconPolicyId));
+        if (hasBeacon) {
+          // Extract inline datum from Koios response
+          const rawEntry = (rawUtxos as Array<Record<string, unknown>>)[i];
+          const inlineDatum = rawEntry?.["inline_datum"] as Record<string, string> | undefined;
+          allUtxos.push({
+            utxo: u,
+            address: addr,
+            datumCbor: inlineDatum?.["bytes"] ?? inlineDatum?.["value"] as string | undefined,
+          });
+        }
       }
     } catch {
       // Address might not have UTXOs anymore
     }
   }
-  console.error(`Found ${utxos.length} subscription UTXOs with beacons`);
+  console.error(`Found ${allUtxos.length} subscription UTXOs with beacons`);
 
-  if (utxos.length === 0) {
+  if (allUtxos.length === 0) {
     console.log("No subscription UTXOs found.");
     return;
   }
 
-  // Analyze claimability using a validFrom time 15s in the past.
-  // This same value will be used for the tx's validFrom — the validator
-  // sees it as tx_lower_bound and uses it for interval calculation.
+  // Analyze claimability
   const validFromMs = BigInt(Date.now()) - 15_000n;
   const claimable: ClaimableInfo[] = [];
-
-  for (const utxo of utxos) {
-    const info = analyzeClaimable(utxo, validFromMs);
+  for (const entry of allUtxos) {
+    const info = analyzeClaimable(entry.utxo, entry.address, entry.datumCbor, validFromMs);
     if (info) claimable.push(info);
   }
 
@@ -266,129 +253,70 @@ export async function executeWithdraw(
     console.log("No claimable subscription UTXOs at this time.");
     return;
   }
+  console.error(`${claimable.length} claimable UTXOs (processing up to ${MAX_BATCH})`);
 
-  console.error(
-    `${claimable.length} claimable UTXOs (processing up to ${MAX_BATCH})`,
-  );
-
-  // Take a batch
   const batch = claimable.slice(0, MAX_BATCH);
-
-  // Load validator scripts and apply parameters
   const scripts = loadValidatorScripts();
 
-  // The blueprint (plutus.json) has params already applied via `aiken blueprint apply`.
-  // Use compiledCode directly — do NOT re-apply params.
-  const subscriptionValidator = {
-    type: "PlutusV3" as const,
-    script: scripts.subscriptionCompiledCode,
-  };
-
-  const beaconPolicy = {
-    type: "PlutusV3" as const,
-    script: scripts.beaconCompiledCode,
-  };
-
-  // Get server key hash for addSignerKey
-  const { getAddressDetails } = await import("@lucid-evolution/lucid");
-  const signerDetails = getAddressDetails(signerAddr);
-  const serverKeyHash = signerDetails.paymentCredential?.hash;
-  if (!serverKeyHash) {
-    throw new Error("Could not extract payment key hash from signer address");
-  }
-
-  // Build redeemer for ServiceCollect (Constr index 0, no fields)
+  // Build redeemers
   const serviceCollectRedeemer = Data.to(new Constr(0, []));
-  // CloseSubscription redeemer (Constr index 1, no fields)
   const closeSubRedeemer = Data.to(new Constr(1, []));
 
-  // Build the transaction
-  let tx = lucid.newTx();
-
-  // Attach validator and beacon policy scripts
-  tx = tx.attach.SpendingValidator(subscriptionValidator);
-
+  // Build script inputs and outputs
+  const scriptInputs: ScriptInput[] = [];
+  const outputs: TxOutput[] = [];
   let totalCollected = 0n;
-  let beaconBurns: Record<string, bigint> = {};
+  const beaconBurns: Record<string, bigint> = {};
   let hasBeaconBurns = false;
 
-  // Set validity range — validFromMs must match what we used for interval calculations
-  tx = tx.validFrom(Number(validFromMs)).validTo(Date.now() + 600_000);
-
-  // Add signer
-  tx = tx.addSignerKey(serverKeyHash);
-
   for (const info of batch) {
-    // Spend the script UTXO with ServiceCollect redeemer
-    tx = tx.collectFrom([info.utxo], serviceCollectRedeemer);
+    scriptInputs.push({
+      utxo: info.utxo,
+      address: info.address,
+      redeemerCbor: serviceCollectRedeemer,
+    });
 
     totalCollected += info.collectAmount;
 
-    // Always create a continuing output (even for fully consumed subscriptions).
-    // The validator's ServiceCollect path requires a continuing output with
-    // updated datum. For fully consumed subscriptions, amount_remaining = 0.
-    {
-      // Create continuing output with updated datum
-      const updatedDatum: SubscriptionDatum = {
-        ...info.datum,
-        amountRemaining: info.datum.amountRemaining - info.collectAmount,
-        lastCollected:
-          info.datum.lastCollected +
-          info.intervals * info.datum.intervalMs,
-      };
+    // Continuing output with updated datum
+    const updatedDatum: SubscriptionDatum = {
+      ...info.datum,
+      amountRemaining: info.datum.amountRemaining - info.collectAmount,
+      lastCollected: info.datum.lastCollected + info.intervals * info.datum.intervalMs,
+    };
+    const datumCbor = encodeSubscriptionDatum(updatedDatum);
 
-      const datumCbor = encodeSubscriptionDatum(updatedDatum);
+    const isAdaPayment =
+      updatedDatum.paymentAsset.policyId === "" &&
+      updatedDatum.paymentAsset.assetName === "";
 
-      // The continuing output must have the same payment asset locked
-      const isAdaPayment =
-        updatedDatum.paymentAsset.policyId === "" &&
-        updatedDatum.paymentAsset.assetName === "";
+    const continuingAssets: Assets = { lovelace: 0n };
 
-      // Compute continuing output assets — keep beacon token + remaining payment
-      const continuingAssets: Record<string, bigint> = {};
-
-      // Copy beacon tokens from input
-      for (const [unit, qty] of Object.entries(info.utxo.assets)) {
-        if (unit.startsWith(web3.beaconPolicyId)) {
-          continuingAssets[unit] = qty;
-        }
+    // Copy beacon tokens from input
+    for (const [unit, qty] of Object.entries(info.utxo.tokens)) {
+      if (unit.startsWith(web3.beaconPolicyId)) {
+        continuingAssets[unit] = qty;
       }
-
-      if (isAdaPayment) {
-        // The lovelace in the continuing output should be reduced by collectAmount
-        const inputLovelace = info.utxo.assets["lovelace"] ?? 0n;
-        continuingAssets["lovelace"] =
-          inputLovelace - info.collectAmount;
-      } else {
-        // Keep min ADA and reduce the payment token
-        continuingAssets["lovelace"] = 2_000_000n;
-        const payUnit =
-          updatedDatum.paymentAsset.policyId +
-          updatedDatum.paymentAsset.assetName;
-        const inputTokenAmount = info.utxo.assets[payUnit] ?? 0n;
-        continuingAssets[payUnit] = inputTokenAmount - info.collectAmount;
-      }
-
-      // Continue to the same CIP-89 address (subscriber's script address)
-      tx = tx.pay.ToAddressWithData(
-        info.utxo.address,
-        { kind: "inline", value: datumCbor },
-        continuingAssets,
-      );
     }
+
+    if (isAdaPayment) {
+      continuingAssets.lovelace = info.utxo.lovelace - info.collectAmount;
+    } else {
+      continuingAssets.lovelace = 2_000_000n;
+      const payUnit = updatedDatum.paymentAsset.policyId + updatedDatum.paymentAsset.assetName;
+      const inputTokenAmount = info.utxo.tokens[payUnit] ?? 0n;
+      continuingAssets[payUnit] = inputTokenAmount - info.collectAmount;
+    }
+
+    outputs.push({
+      address: info.address,
+      assets: continuingAssets,
+      datumCbor,
+    });
   }
 
-  // Mint (burn) beacon tokens if any subscriptions are fully consumed
-  if (hasBeaconBurns) {
-    tx = tx.attach.MintingPolicy(beaconPolicy);
-    tx = tx.mintAssets(beaconBurns, closeSubRedeemer);
-  }
-
-  // Send collected funds to recipient
-  // For simplicity, the collected funds automatically flow to the change address
-  // unless the recipient is different from the signer
-  if (toAddress !== signerAddr) {
-    // Determine what token we collected (use the first batch item's payment asset)
+  // Send collected funds to recipient (if different from signer)
+  if (toAddress !== wallet.address) {
     const firstInfo = batch[0];
     if (firstInfo) {
       const isAdaPayment =
@@ -396,37 +324,54 @@ export async function executeWithdraw(
         firstInfo.datum.paymentAsset.assetName === "";
 
       if (isAdaPayment) {
-        tx = tx.pay.ToAddress(toAddress, { lovelace: totalCollected });
+        outputs.push({ address: toAddress, assets: { lovelace: totalCollected } });
       } else {
-        const payUnit =
-          firstInfo.datum.paymentAsset.policyId +
-          firstInfo.datum.paymentAsset.assetName;
-        tx = tx.pay.ToAddress(toAddress, {
-          lovelace: 2_000_000n,
-          [payUnit]: totalCollected,
+        const payUnit = firstInfo.datum.paymentAsset.policyId + firstInfo.datum.paymentAsset.assetName;
+        outputs.push({
+          address: toAddress,
+          assets: { lovelace: 2_000_000n, [payUnit]: totalCollected },
         });
       }
     }
   }
 
-  // Complete, sign, submit
+  // Mint entries (beacon burns for fully consumed subscriptions)
+  const mintEntries: MintEntry[] = [];
+  if (hasBeaconBurns) {
+    mintEntries.push({
+      policyId: beaconPolicyId,
+      assets: beaconBurns,
+      redeemerCbor: closeSubRedeemer,
+      scriptCbor: scripts.beaconCompiledCode,
+    });
+  }
+
+  // Submit
   try {
-    const completed = await tx.complete();
-    const signed = await completed.sign.withWallet().complete();
-    const txHash = await signed.submit();
+    const txHash = await buildAndSubmitScriptTx({
+      provider,
+      walletAddress: wallet.address,
+      scriptInputs,
+      outputs,
+      mints: mintEntries.length > 0 ? mintEntries : undefined,
+      spendingScriptCbor: scripts.subscriptionCompiledCode,
+      validFrom: Number(validFromMs),
+      validTo: Date.now() + 600_000,
+      requiredSigners: [serverKeyHash],
+      signingKey: new Uint8Array([...wallet.paymentKey]),
+    });
+
     console.log(txHash);
-    console.error(
-      `Collected from ${batch.length} UTXOs, total: ${totalCollected.toString()} base units`,
-    );
+    console.error(`Collected from ${batch.length} UTXOs, total: ${totalCollected.toString()} base units`);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`Transaction failed: ${msg}`);
     console.error("Claimable UTXOs that were attempted:");
     for (const info of batch) {
       console.error(
-        `  ${info.utxo.txHash}#${info.utxo.outputIndex}: ` +
-          `collect=${info.collectAmount.toString()} ` +
-          `(${info.fullyConsumed ? "fully consumed" : "partial"})`,
+        `  ${info.utxo.txHash}#${info.utxo.index}: ` +
+        `collect=${info.collectAmount.toString()} ` +
+        `(${info.fullyConsumed ? "fully consumed" : "partial"})`,
       );
     }
     throw new Error(`withdraw transaction failed: ${msg}`);
