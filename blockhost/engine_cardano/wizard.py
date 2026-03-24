@@ -377,6 +377,28 @@ def get_summary_template() -> str:
     return "engine_cardano/summary_section.html"
 
 
+def get_nginx_extra_locations(session_data: dict) -> str:
+    """Return extra nginx location blocks for the engine.
+
+    Injected by the installer into the server{} block when building nginx config.
+    The Cardano engine needs a Koios reverse proxy so the signup page can
+    query the chain without CORS issues.
+    """
+    blockchain = session_data.get("blockchain", {})
+    network = blockchain.get("network", "preprod")
+    koios = _koios_url(network)
+
+    return f"""
+    # Cardano chain API proxy (Koios) — used by signup page
+    location /api/v1/ {{
+        proxy_pass {koios}/;
+        proxy_set_header Host $proxy_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_ssl_server_name on;
+    }}
+"""
+
+
 def get_progress_steps_meta() -> list[dict]:
     """Return step metadata for the progress UI."""
     pre = [
