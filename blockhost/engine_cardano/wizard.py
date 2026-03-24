@@ -501,6 +501,47 @@ def _discover_bridge() -> str:
     return "br0"
 
 
+def _script_address(script_hash: str, network: str) -> str:
+    """Build a bech32 enterprise script address from a script hash."""
+    header = 0x71 if network == "mainnet" else 0x70
+    data = bytes([header]) + bytes.fromhex(script_hash)
+    # Bech32 encoding (inline — no external dependency)
+    CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
+
+    def _bech32_polymod(values: list[int]) -> int:
+        GEN = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3]
+        chk = 1
+        for v in values:
+            b = chk >> 25
+            chk = ((chk & 0x1FFFFFF) << 5) ^ v
+            for i in range(5):
+                chk ^= GEN[i] if ((b >> i) & 1) else 0
+        return chk
+
+    def _bech32_hrp_expand(hrp: str) -> list[int]:
+        return [ord(c) >> 5 for c in hrp] + [0] + [ord(c) & 31 for c in hrp]
+
+    def _convertbits(data: bytes, frombits: int, tobits: int) -> list[int]:
+        acc, bits, ret = 0, 0, []
+        for value in data:
+            acc = (acc << frombits) | value
+            bits += frombits
+            while bits >= tobits:
+                bits -= tobits
+                ret.append((acc >> bits) & ((1 << tobits) - 1))
+        if bits:
+            ret.append((acc << (tobits - bits)) & ((1 << tobits) - 1))
+        return ret
+
+    hrp = "addr" if network == "mainnet" else "addr_test"
+    words = _convertbits(data, 8, 5)
+    polymod = _bech32_polymod(
+        _bech32_hrp_expand(hrp) + words + [0, 0, 0, 0, 0, 0]
+    ) ^ 1
+    checksum = [(polymod >> 5 * (5 - i)) & 31 for i in range(6)]
+    return hrp + "1" + "".join(CHARSET[w] for w in words + checksum)
+
+
 def _bw_env(blockchain: dict) -> dict:
     """Build environment for bw CLI calls."""
     return {
@@ -741,6 +782,12 @@ def finalize_chain_config(config: dict) -> tuple[bool, Optional[str]]:
 
         # --- web3-defaults.yaml ---
         beacon_policy_id = blockchain.get("beacon_policy_id", "")
+
+        # Compute subscription validator bech32 address (enterprise script address)
+        sub_validator_address = ""
+        if sub_policy_id:
+            sub_validator_address = _script_address(sub_policy_id, network)
+
         web3_blockchain: dict = {
             "network": network,
             "nft_policy_id": nft_policy_id,
@@ -748,6 +795,7 @@ def finalize_chain_config(config: dict) -> tuple[bool, Optional[str]]:
             "subscription_policy_id": sub_policy_id,
             "subscription_contract": sub_policy_id,      # interface convention
             "subscription_validator_hash": sub_policy_id, # engine config expects this name
+            "subscription_validator_address": sub_validator_address,
             "beacon_policy_id": beacon_policy_id,
             "server_public_key": server_pubkey,
         }
