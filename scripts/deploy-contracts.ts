@@ -28,6 +28,8 @@ import * as path from "node:path";
 import {
   deriveWallet,
   getProvider,
+  getPaymentKeyHash,
+  applyParamsToScript,
   parseKoiosUtxos,
   selectUtxos,
   addressToHex,
@@ -114,28 +116,80 @@ async function main(): Promise<void> {
   const wallet = await deriveWallet(mnemonic, NETWORK);
   const provider = getProvider(NETWORK);
 
-  process.stderr.write(`Deployer:  ${wallet.address.slice(0, 30)}...\n\n`);
+  const serverKeyHash = getPaymentKeyHash(wallet.address);
+  if (!serverKeyHash) {
+    process.stderr.write("blockhost-deploy-contracts: could not extract payment key hash\n");
+    process.exit(1);
+  }
+  process.stderr.write(`Deployer:  ${wallet.address.slice(0, 30)}...\n`);
+  process.stderr.write(`Key hash:  ${serverKeyHash}\n\n`);
+
+  /** Compute script hash: blake2b_224(0x03 ++ compiledCode_bytes) */
+  function computeHash(compiledCode: string): string {
+    const bytes = hexToBytes(compiledCode);
+    const prefixed = new Uint8Array(1 + bytes.length);
+    prefixed[0] = 0x03;
+    prefixed.set(bytes, 1);
+    return bytesToHex(blake2b(prefixed, { dkLen: 28 }));
+  }
+
+  // ── Apply parameters ──────────────────────────────────────────────────────
+  // Dependency order: subscription first (2 params) → beacon gets sub hash → NFT gets key hash
+
+  const subValidator = blueprint.validators.find(v => v.title === "subscription.subscription.spend");
+  const beaconValidator = blueprint.validators.find(v => v.title === "beacon.beacon.mint");
+  const nftValidator = blueprint.validators.find(v => v.title === "nft.nft.mint");
+
+  // Apply params to subscription: server_key_hash + service_address_key_hash (same key for both)
+  let subCode = subValidator?.compiledCode ?? "";
+  if (subValidator?.parameters?.length) {
+    subCode = applyParamsToScript(subCode, [serverKeyHash, serverKeyHash]);
+  }
+  const subHash = subCode ? computeHash(subCode) : "";
+
+  // Apply subscription_validator_hash to beacon
+  let beaconCode = beaconValidator?.compiledCode ?? "";
+  if (beaconValidator?.parameters?.length) {
+    beaconCode = applyParamsToScript(beaconCode, [subHash]);
+  }
+  const beaconHash = beaconCode ? computeHash(beaconCode) : "";
+
+  // Apply server_key_hash to NFT
+  let nftCode = nftValidator?.compiledCode ?? "";
+  if (nftValidator?.parameters?.length) {
+    nftCode = applyParamsToScript(nftCode, [serverKeyHash]);
+  }
+  const nftHash = nftCode ? computeHash(nftCode) : "";
+
+  // Map of parameterized codes by title
+  const parameterized: Record<string, { code: string; hash: string }> = {
+    "subscription.subscription.spend": { code: subCode, hash: subHash },
+    "beacon.beacon.mint": { code: beaconCode, hash: beaconHash },
+    "nft.nft.mint": { code: nftCode, hash: nftHash },
+  };
+
+  process.stderr.write(`Parameterized hashes:\n`);
+  process.stderr.write(`  Subscription: ${subHash}\n`);
+  process.stderr.write(`  Beacon:       ${beaconHash}\n`);
+  process.stderr.write(`  NFT:          ${nftHash}\n\n`);
+
+  // ── Deploy ────────────────────────────────────────────────────────────────
 
   const targets = MODE === "all"
     ? TARGETS
     : TARGETS.filter(t => t.key.startsWith(MODE === "sub" ? "subscription" : MODE));
 
   for (const target of targets) {
-    const validator = blueprint.validators.find(v => v.title === target.pattern);
-    if (!validator) {
+    const p = parameterized[target.pattern];
+    if (!p || !p.code) {
       process.stderr.write(`${target.label}: not found in blueprint, skipping\n`);
       continue;
     }
 
-    if (validator.parameters && validator.parameters.length > 0) {
-      process.stderr.write(`${target.label}: has ${validator.parameters.length} unapplied parameter(s) — run 'aiken blueprint apply' first\n`);
-      process.exit(1);
-    }
-
     process.stderr.write(`Deploying ${target.label}...\n`);
-    process.stderr.write(`  Hash: ${validator.hash}\n`);
+    process.stderr.write(`  Hash: ${p.hash}\n`);
 
-    const scriptBytes = hexToBytes(validator.compiledCode);
+    const scriptBytes = hexToBytes(p.code);
     process.stderr.write(`  Size: ${scriptBytes.length} bytes\n`);
 
     // Build reference script output
@@ -252,7 +306,7 @@ async function main(): Promise<void> {
       }
     }
     // Always emit the hash — deterministic from compiledCode regardless of deployment
-    process.stdout.write(`${target.key}=${validator.hash}\n`);
+    process.stdout.write(`${target.key}=${p.hash}\n`);
     if (!deployed) {
       process.stderr.write(`  WARNING: could not deploy on-chain, but hash is correct\n`);
     }

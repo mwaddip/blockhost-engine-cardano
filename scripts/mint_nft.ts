@@ -24,7 +24,7 @@ import { blake2b } from "@noble/hashes/blake2b";
 import { deriveWallet } from "cmttk";
 import { getProvider } from "cmttk";
 import { getPaymentKeyHash } from "cmttk";
-import { Constr, Data } from "cmttk";
+import { Constr, Data, applyParamsToScript } from "cmttk";
 import { buildAndSubmitScriptTx } from "cmttk";
 import { hexToBytes, bytesToHex } from "cmttk";
 import { userTokenAssetName, referenceTokenAssetName } from "../src/nft/mint.js";
@@ -221,9 +221,14 @@ async function main(): Promise<void> {
   process.stderr.write(`Deployer address: ${deployerAddress}\n`);
   process.stderr.write(`Server key hash:  ${serverKeyHash}\n`);
 
-  // The NFT policy in plutus.json should already have server_key_hash applied
-  // (via aiken blueprint apply). Verify the computed policy ID matches config.
-  const nftCompiledCode = loadNftCompiledCode();
+  // Apply server_key_hash parameter if the blueprint is unparameterized
+  let nftCompiledCode = loadNftCompiledCode();
+  // Check if it needs parameterization by comparing computed hash with config
+  const rawPolicyId = computePolicyId(nftCompiledCode);
+  if (cfg.nftPolicyId && rawPolicyId !== cfg.nftPolicyId) {
+    // Unparameterized — apply server_key_hash
+    nftCompiledCode = applyParamsToScript(nftCompiledCode, [serverKeyHash]);
+  }
   const policyId = computePolicyId(nftCompiledCode);
   process.stderr.write(`Computed policy ID: ${policyId}\n`);
 
