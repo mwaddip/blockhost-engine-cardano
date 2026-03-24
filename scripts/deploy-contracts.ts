@@ -144,10 +144,18 @@ async function main(): Promise<void> {
     const refScript = cborTag(24, cborBytes(innerScript));
 
     const fromAddrHex = addressToHex(wallet.address);
+
+    // Send reference script to an enterprise address (payment key only, no staking).
+    // This keeps ref script UTXOs separate from the deployer's spendable base address,
+    // preventing coin selection from accidentally spending them in future transactions.
+    const paymentKeyHash = fromAddrHex.slice(2, 58); // skip header byte, take 28 bytes
+    const enterpriseHeader = NETWORK === "mainnet" ? "61" : "60";
+    const refScriptAddrHex = enterpriseHeader + paymentKeyHash;
+
     const minUtxo = BigInt(Math.max(2_000_000, Math.ceil((160 + 60 + scriptBytes.length) * 4310 * 1.15)));
 
     const refOutput = cborMap([
-      [cborUint(0n), cborBytes(hexToBytes(fromAddrHex))],
+      [cborUint(0n), cborBytes(hexToBytes(refScriptAddrHex))],
       [cborUint(1n), cborUint(minUtxo)],
       [cborUint(3n), refScript],
     ]);
