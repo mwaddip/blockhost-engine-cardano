@@ -733,8 +733,9 @@ def finalize_contracts(config: dict) -> tuple[bool, Optional[str]]:
             line = line.strip()
             if "=" in line:
                 key, _, val = line.partition("=")
-                if POLICY_ID_RE.match(val.strip()):
-                    kv[key.strip()] = val.strip()
+                val = val.strip()
+                if POLICY_ID_RE.match(val) or key.strip() == "beacon_script_cbor":
+                    kv[key.strip()] = val
             elif POLICY_ID_RE.match(line):
                 # Bare hex line (legacy format)
                 kv[f"_bare_{len(kv)}"] = line
@@ -758,6 +759,9 @@ def finalize_contracts(config: dict) -> tuple[bool, Optional[str]]:
             blockchain["subscription_contract"] = sub       # interface convention
             if beacon:
                 blockchain["beacon_policy_id"] = beacon
+            beacon_cbor = kv.get("beacon_script_cbor", "")
+            if beacon_cbor:
+                blockchain["beacon_script_cbor"] = beacon_cbor
             config["blockchain"] = blockchain
             config["_step_result_contracts"] = {
                 "nft_policy_id": nft,
@@ -804,6 +808,7 @@ def finalize_chain_config(config: dict) -> tuple[bool, Optional[str]]:
 
         # --- web3-defaults.yaml ---
         beacon_policy_id = blockchain.get("beacon_policy_id", "")
+        beacon_script_cbor = blockchain.get("beacon_script_cbor", "")
 
         # Compute subscription validator bech32 address (enterprise script address)
         sub_validator_address = ""
@@ -819,6 +824,7 @@ def finalize_chain_config(config: dict) -> tuple[bool, Optional[str]]:
             "subscription_validator_hash": sub_policy_id, # engine config expects this name
             "subscription_validator_address": sub_validator_address,
             "beacon_policy_id": beacon_policy_id,
+            "beacon_script_cbor": beacon_script_cbor,
             "server_public_key": server_pubkey,
         }
         if blockfrost_project_id:

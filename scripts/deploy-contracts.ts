@@ -318,6 +318,11 @@ async function main(): Promise<void> {
     }
   }
 
+  // Emit parameterized beacon script CBOR for signup page
+  if (beaconCode) {
+    process.stdout.write(`beacon_script_cbor=${beaconCode}\n`);
+  }
+
   process.stderr.write("\nDone.\n");
 }
 
