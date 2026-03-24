@@ -729,8 +729,9 @@
             var protocolParams = ppArr[0];
 
             // C.8  Compute min-UTXO lovelace for the script output
-            //      Approximate: 2 ADA is generous for a datum-bearing UTXO with one native token
-            var minUtxoLovelace = 2000000n;
+            //      Subscription datums can be large (encrypted keys, beacon ID, etc.)
+            //      5 ADA covers outputs up to ~1KB datum. The node rejects if too low.
+            var minUtxoLovelace = 5000000n;
 
             // C.9  Compute required lovelace for the script output
             var scriptOutputLovelace;
