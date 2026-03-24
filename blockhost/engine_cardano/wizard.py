@@ -740,12 +740,15 @@ def finalize_chain_config(config: dict) -> tuple[bool, Optional[str]]:
         bridge = provisioner.get("bridge") or _discover_bridge()
 
         # --- web3-defaults.yaml ---
+        beacon_policy_id = blockchain.get("beacon_policy_id", "")
         web3_blockchain: dict = {
             "network": network,
             "nft_policy_id": nft_policy_id,
             "nft_contract": nft_policy_id,              # interface convention
             "subscription_policy_id": sub_policy_id,
             "subscription_contract": sub_policy_id,      # interface convention
+            "subscription_validator_hash": sub_policy_id, # engine config expects this name
+            "beacon_policy_id": beacon_policy_id,
             "server_public_key": server_pubkey,
         }
         if blockfrost_project_id:
