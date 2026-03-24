@@ -15,6 +15,7 @@ import { deriveWallet } from "cmttk";
 import { Constr, Data, fromText } from "cmttk";
 import { buildAndSubmitScriptTx } from "cmttk";
 import * as fs from "fs";
+import * as yaml from "js-yaml";
 
 // ── Datum encoding ───────────────────────────────────────────────────────────
 
@@ -149,13 +150,23 @@ async function planCreateCommand(
   // Encode the datum
   const datumCbor = encodePlanDatum(planId, name, pricePerDay, acceptedAssets, true);
 
-  // Create the plan reference UTXO at the server's own address
+  // Read the subscription validator address from config — plans are stored there
+  // so the signup page can find them
+  const CONFIG_DIR = process.env["BLOCKHOST_CONFIG_DIR"] ?? "/etc/blockhost";
+  let planAddress = wallet.address; // fallback to deployer address
+  try {
+    const w3 = yaml.load(fs.readFileSync(`${CONFIG_DIR}/web3-defaults.yaml`, "utf8")) as Record<string, Record<string, string>>;
+    const validatorAddr = w3?.["blockchain"]?.["subscription_validator_address"];
+    if (validatorAddr) planAddress = validatorAddr;
+  } catch { /* use fallback */ }
+
+  // Create the plan reference UTXO at the validator address
   const txHash = await buildAndSubmitScriptTx({
     provider,
     walletAddress: wallet.address,
     scriptInputs: [],
     outputs: [{
-      address: wallet.address,
+      address: planAddress,
       assets: { lovelace: 2_000_000n },
       datumCbor,
     }],
