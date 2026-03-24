@@ -164,25 +164,21 @@ function allocateTokenId(): number {
 // ── Blueprint loading ──────────────────────────────────────────────────────
 
 function loadNftCompiledCode(): string {
-  const blueprintPath = path.resolve(
-    path.dirname(new URL(import.meta.url).pathname),
-    "..",
+  const candidates = [
+    "/usr/share/blockhost/contracts/plutus.json",
+    `${CONFIG_DIR}/plutus.json`,
     "plutus.json",
-  );
+  ];
+  try {
+    const scriptDir = path.dirname(new URL(import.meta.url).pathname);
+    if (scriptDir) candidates.unshift(path.resolve(scriptDir, "..", "plutus.json"));
+  } catch { /* bundled — import.meta.url not available */ }
 
-  if (!fs.existsSync(blueprintPath)) {
-    // Try config dir
-    const configPath = `${CONFIG_DIR}/plutus.json`;
-    if (!fs.existsSync(configPath)) {
-      process.stderr.write(`blockhost-mint-nft: plutus.json not found\n`);
-      process.exit(1);
-    }
-    const bp = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
-      validators: Array<{ title: string; compiledCode: string }>;
-    };
-    const v = bp.validators.find((v) => v.title === "nft.nft.mint");
-    if (!v) { process.stderr.write("blockhost-mint-nft: nft.nft.mint not found\n"); process.exit(1); }
-    return v.compiledCode;
+  const blueprintPath = candidates.find(p => fs.existsSync(p));
+
+  if (!blueprintPath) {
+    process.stderr.write("blockhost-mint-nft: plutus.json not found\n");
+    process.exit(1);
   }
 
   const bp = JSON.parse(fs.readFileSync(blueprintPath, "utf8")) as {
