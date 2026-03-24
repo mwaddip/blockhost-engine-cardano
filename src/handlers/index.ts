@@ -20,7 +20,6 @@ import * as fs from "node:fs";
 import type { TrackedSubscription } from "../monitor/scanner.js";
 import { eciesDecrypt, symmetricEncrypt, loadServerPrivateKey } from "../crypto.js";
 import { getCommand } from "../provisioner.js";
-import { isValidAddress } from "cmttk";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -232,10 +231,10 @@ async function destroyVm(vmName: string): Promise<{ success: boolean; output: st
 export async function handleSubscriptionCreated(sub: TrackedSubscription): Promise<void> {
   const { datum, beaconName, utxoRef } = sub;
 
-  // Validate bech32 subscriber address before using in subprocess args
-  if (!isValidAddress(datum.subscriber)) {
+  // Validate subscriber key hash (28 bytes = 56 hex chars)
+  if (!/^[0-9a-fA-F]{56}$/.test(datum.subscriber)) {
     console.error(
-      `[ERROR] Invalid subscriber address for beacon ${beaconName}: ${datum.subscriber}`,
+      `[ERROR] Invalid subscriber key hash for beacon ${beaconName}: ${datum.subscriber}`,
     );
     return;
   }

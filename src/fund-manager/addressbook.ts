@@ -98,6 +98,25 @@ export async function ensureHotWallet(book: Addressbook): Promise<Addressbook> {
     return book;
   }
 
+  // If the key file already exists (from a previous run), derive the address
+  // instead of asking the root agent to generate a new one (which would fail).
+  if (fs.existsSync(HOT_KEY_PATH)) {
+    console.log("[FUND] Hot wallet key exists, deriving address...");
+    const mnemonic = fs.readFileSync(HOT_KEY_PATH, "utf8").trim();
+    const { deriveWallet } = await import("cmttk");
+    const { loadNetworkConfig } = await import("./web3-config.js");
+    const { network } = loadNetworkConfig();
+    const wallet = await deriveWallet(mnemonic, network);
+
+    book["hot"] = {
+      address: wallet.address,
+      keyfile: HOT_KEY_PATH,
+    };
+    await saveAddressbook(book);
+    console.log(`[FUND] Recovered hot wallet: ${wallet.address}`);
+    return book;
+  }
+
   console.log("[FUND] Generating hot wallet via root agent...");
   const { address } = await rootAgentGenerateWallet("hot");
 
