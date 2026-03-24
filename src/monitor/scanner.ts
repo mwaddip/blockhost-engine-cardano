@@ -78,7 +78,7 @@ interface BlockfrostUtxo {
  * the known state.  Updates the known state in-place before returning.
  */
 export async function scanBeacons(
-  client: BlockFrostAPI,
+  _client: BlockFrostAPI,
   _validatorAddress: string,
   beaconPolicyId: string,
   network: string = "preprod",
@@ -113,15 +113,40 @@ export async function scanBeacons(
   const utxos: BlockfrostUtxo[] = [];
   for (const addr of uniqueAddresses) {
     try {
-      const raw = await client.addressesUtxosAll(addr);
-      for (const u of raw as BlockfrostUtxo[]) {
-        const hasBeacon = (u.amount ?? []).some(
+      // Use Koios directly (same as holder query) instead of Blockfrost client
+      const res = await fetch(`${koiosUrl}/address_utxos`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ _addresses: [addr], _extended: true }),
+      });
+      if (!res.ok) continue;
+      const raw = (await res.json()) as Array<Record<string, unknown>>;
+
+      // Convert Koios format to Blockfrost-like format for downstream compatibility
+      for (const u of raw) {
+        const assetList = u["asset_list"] as Array<Record<string, string>> | undefined;
+        const amount = [{ unit: "lovelace", quantity: String(u["value"] ?? "0") }];
+        if (assetList) {
+          for (const a of assetList) {
+            amount.push({ unit: (a["policy_id"] ?? "") + (a["asset_name"] ?? ""), quantity: a["quantity"] ?? "0" });
+          }
+        }
+        // Koios inline_datum has { bytes, value } — the scanner expects the value part
+        const koiosDatum = u["inline_datum"] as Record<string, unknown> | undefined;
+        const inlineDatum = koiosDatum?.["value"] as PlutusValue | undefined;
+        const bfUtxo: BlockfrostUtxo = {
+          tx_hash: u["tx_hash"] as string,
+          tx_index: Number(u["tx_index"] ?? 0),
+          amount,
+          inline_datum: inlineDatum ?? null,
+        };
+        const hasBeacon = amount.some(
           (a) => a.unit.startsWith(beaconPolicyId) && a.unit.length > 56,
         );
-        if (hasBeacon) utxos.push(u);
+        if (hasBeacon) utxos.push(bfUtxo);
       }
-    } catch (err: unknown) {
-      if (!isBlockfrost404(err)) throw err;
+    } catch {
+      // Address unavailable — skip
     }
   }
 
@@ -321,11 +346,3 @@ function bytesField(v: PlutusValue): string | null {
 
 // ── Utility ───────────────────────────────────────────────────────────────────
 
-function isBlockfrost404(err: unknown): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    "status_code" in err &&
-    (err as { status_code: number }).status_code === 404
-  );
-}
