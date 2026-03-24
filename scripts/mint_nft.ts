@@ -119,8 +119,12 @@ function loadConfig() {
     networkRaw === "mainnet" ? "mainnet" :
     networkRaw === "preview"  ? "preview"  : "preprod";
 
+  // Only use Blockfrost if a valid project ID is present (starts with network prefix)
+  const bfId = bc?.blockfrost_project_id ?? "";
+  const validBf = /^(mainnet|preprod|preview)[a-zA-Z0-9]{32}$/.test(bfId) ? bfId : "";
+
   return {
-    blockfrostProjectId: bc?.blockfrost_project_id ?? "",
+    blockfrostProjectId: validBf,
     network,
     nftPolicyId: bc?.nft_policy_id ?? "",
   };
