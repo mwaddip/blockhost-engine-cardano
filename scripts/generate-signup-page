@@ -126,6 +126,18 @@ def load_config(config_path: str, web3_config_path: str) -> dict:
         print(f'Warning: plutus.json not found — beacon script CBOR will be empty',
               file=sys.stderr)
 
+    # Load deployer (server) address from addressbook
+    ab_path = os.path.join(config_dir, 'addressbook.json')
+    if os.path.exists(ab_path):
+        try:
+            with open(ab_path) as f:
+                addressbook = json.load(f)
+            server_entry = addressbook.get('server', {})
+            if server_entry.get('address'):
+                config['deployer_address'] = server_entry['address']
+        except (json.JSONDecodeError, OSError):
+            pass
+
     return config
 
 
@@ -152,6 +164,7 @@ def generate_page(config: dict, template: str) -> str:
         '{{SUBSCRIPTION_VALIDATOR_HASH}}':    config.get('subscription_validator_hash',
                                                          bc.get('subscription_validator_hash', '')),
         '{{NETWORK}}':                        bc.get('network', 'preprod'),
+        '{{DEPLOYER_ADDRESS}}':               config.get('deployer_address', ''),
         '{{PAGE_TITLE}}':                     config.get('page_title', 'BlockHost - Get Your Server'),
         '{{PRIMARY_COLOR}}':                  config.get('primary_color', '#0033AD'),
     }

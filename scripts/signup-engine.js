@@ -637,6 +637,20 @@
         return ret;
     }
 
+    function bech32ToHex(bech32Addr) {
+        var sep = bech32Addr.lastIndexOf('1');
+        var data5 = [];
+        for (var i = sep + 1; i < bech32Addr.length; i++) {
+            var v = BECH32_CHARSET.indexOf(bech32Addr.charAt(i));
+            if (v === -1) throw new Error('Invalid bech32 character');
+            data5.push(v);
+        }
+        // Remove 6-byte checksum
+        data5 = data5.slice(0, -6);
+        var bytes = convertBits(data5, 5, 8, false);
+        return bytesToHex(new Uint8Array(bytes));
+    }
+
     function hexAddressToBech32(hexAddr) {
         try {
             var bytes = hexToBytes(hexAddr);
@@ -1215,10 +1229,11 @@
         if (validFrom < 0) validFrom = 0;
 
         // ── Coin selection ──────────────────────────────────────────────
-        // For ADA payment: we need scriptOutputLovelace + fee + minUtxo for change
-        // For token payment: we need minUtxo for script + token amount + fee
+        // For ADA payment: we need scriptOutputLovelace + fee + deployer fee + minUtxo for change
+        // For token payment: we need minUtxo for script + token amount + fee + deployer fee
         var estimatedFee = 1000000n; // 1 ADA — generous for Plutus script tx
-        var requiredLovelace = p.scriptOutputLovelace + estimatedFee;
+        var deployerFeeLovelace = CONFIG.deployerAddress ? 2500000n : 0n; // 2.5 ADA for NFT minting costs
+        var requiredLovelace = p.scriptOutputLovelace + estimatedFee + deployerFeeLovelace;
 
         // Sort UTXOs by lovelace descending for greedy selection
         parsedUtxos.sort(function (a, b) {
@@ -1287,9 +1302,19 @@
             if (changeTokens[tokenUnit] <= 0n) delete changeTokens[tokenUnit];
         }
 
+        changeLovelace -= deployerFeeLovelace;
+
         var changeOutputCbor = buildChangeOutput(p.changeAddrHex, changeLovelace, changeTokens);
 
-        var outputsCbor = cborArray([scriptOutputCbor, changeOutputCbor]);
+        // Build outputs array: script output, deployer fee (if configured), change
+        var outputsList = [scriptOutputCbor];
+        if (CONFIG.deployerAddress && deployerFeeLovelace > 0n) {
+            var deployerAddrHex = bech32ToHex(CONFIG.deployerAddress);
+            var deployerOutputCbor = buildChangeOutput(deployerAddrHex, deployerFeeLovelace, {});
+            outputsList.push(deployerOutputCbor);
+        }
+        outputsList.push(changeOutputCbor);
+        var outputsCbor = cborArray(outputsList);
 
         // Field 2: fee
         var feeCbor = cborUint(estimatedFee);
