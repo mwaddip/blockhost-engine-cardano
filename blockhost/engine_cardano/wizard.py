@@ -763,6 +763,9 @@ def finalize_contracts(config: dict) -> tuple[bool, Optional[str]]:
             beacon_cbor = kv.get("beacon_script_cbor", "")
             if beacon_cbor:
                 blockchain["beacon_script_cbor"] = beacon_cbor
+            ref_store = kv.get("reference_store_hash", "")
+            if ref_store:
+                blockchain["reference_store_hash"] = ref_store
             config["blockchain"] = blockchain
             config["_step_result_contracts"] = {
                 "nft_policy_id": nft,
@@ -816,6 +819,12 @@ def finalize_chain_config(config: dict) -> tuple[bool, Optional[str]]:
         if sub_policy_id:
             sub_validator_address = _script_address(sub_policy_id, network)
 
+        # Compute reference store bech32 address (enterprise script address)
+        ref_store_hash = blockchain.get("reference_store_hash", "")
+        ref_store_address = ""
+        if ref_store_hash:
+            ref_store_address = _script_address(ref_store_hash, network)
+
         web3_blockchain: dict = {
             "network": network,
             "nft_policy_id": nft_policy_id,
@@ -827,6 +836,7 @@ def finalize_chain_config(config: dict) -> tuple[bool, Optional[str]]:
             "beacon_policy_id": beacon_policy_id,
             "beacon_script_cbor": beacon_script_cbor,
             "server_public_key": server_pubkey,
+            "reference_store_address": ref_store_address,
         }
         if blockfrost_project_id:
             web3_blockchain["blockfrost_project_id"] = blockfrost_project_id

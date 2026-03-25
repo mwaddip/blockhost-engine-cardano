@@ -64,6 +64,7 @@ const TARGETS = [
   { pattern: "subscription.subscription.spend", key: "subscription_validator_hash", label: "Subscription validator" },
   { pattern: "beacon.beacon.mint", key: "beacon_policy_id", label: "Beacon minting policy" },
   { pattern: "nft.nft.mint", key: "nft_policy_id", label: "NFT minting policy" },
+  { pattern: "reference_store.reference_store.spend", key: "reference_store_hash", label: "Reference store" },
 ];
 
 // ── Blueprint resolution ────────────────────────────────────────────────────
@@ -161,17 +162,27 @@ async function main(): Promise<void> {
   }
   const nftHash = nftCode ? computeHash(nftCode) : "";
 
+  // Apply server_key_hash to reference store
+  const refStoreValidator = blueprint.validators.find(v => v.title === "reference_store.reference_store.spend");
+  let refStoreCode = refStoreValidator?.compiledCode ?? "";
+  if (refStoreValidator?.parameters?.length) {
+    refStoreCode = applyParamsToScript(refStoreCode, [serverKeyHash]);
+  }
+  const refStoreHash = refStoreCode ? computeHash(refStoreCode) : "";
+
   // Map of parameterized codes by title
   const parameterized: Record<string, { code: string; hash: string }> = {
     "subscription.subscription.spend": { code: subCode, hash: subHash },
     "beacon.beacon.mint": { code: beaconCode, hash: beaconHash },
     "nft.nft.mint": { code: nftCode, hash: nftHash },
+    "reference_store.reference_store.spend": { code: refStoreCode, hash: refStoreHash },
   };
 
   process.stderr.write(`Parameterized hashes:\n`);
   process.stderr.write(`  Subscription: ${subHash}\n`);
   process.stderr.write(`  Beacon:       ${beaconHash}\n`);
-  process.stderr.write(`  NFT:          ${nftHash}\n\n`);
+  process.stderr.write(`  NFT:          ${nftHash}\n`);
+  process.stderr.write(`  Ref store:    ${refStoreHash}\n\n`);
 
   // ── Deploy ────────────────────────────────────────────────────────────────
 

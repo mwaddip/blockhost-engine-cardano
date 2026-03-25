@@ -51,6 +51,7 @@ interface Web3Yaml {
     blockfrost_project_id?: string;
     network?: string;
     nft_policy_id?: string;
+    reference_store_address?: string;
   };
 }
 
@@ -127,6 +128,7 @@ function loadConfig() {
     blockfrostProjectId: validBf,
     network,
     nftPolicyId: bc?.nft_policy_id ?? "",
+    referenceStoreAddress: bc?.reference_store_address ?? "",
   };
 }
 
@@ -261,6 +263,15 @@ async function main(): Promise<void> {
 
   const nowMs = Date.now();
 
+  // Reference token goes to the reference store script address (locked with
+  // inline datum).  Falls back to deployer address if not configured.
+  const refOutputAddress = cfg.referenceStoreAddress || deployerAddress;
+  if (cfg.referenceStoreAddress) {
+    process.stderr.write(`Reference store: ${cfg.referenceStoreAddress}\n`);
+  } else {
+    process.stderr.write("WARNING: reference_store_address not configured, using deployer address (datum unprotected)\n");
+  }
+
   const txHash = await buildAndSubmitScriptTx({
     provider,
     walletAddress: deployerAddress,
@@ -271,9 +282,9 @@ async function main(): Promise<void> {
         address: ownerWallet,
         assets: { lovelace: 2_000_000n, [policyId + userAssetName]: 1n },
       },
-      // Reference token (100) → deployer with inline datum
+      // Reference token (100) → reference store script with inline datum
       {
-        address: deployerAddress,
+        address: refOutputAddress,
         assets: { lovelace: 2_000_000n, [policyId + refAssetName]: 1n },
         datumCbor: referenceDatum,
       },
