@@ -154,6 +154,51 @@ function hexToBytes(hex) {
     return bytes;
 }
 
+function bytesToHex(bytes) {
+    var hex = '';
+    for (var i = 0; i < bytes.length; i++) hex += bytes[i].toString(16).padStart(2, '0');
+    return hex;
+}
+
+// Extract raw Ed25519 signature (64 bytes) from COSE_Sign1 CBOR hex.
+function cborSkip(b, pos) {
+    if (pos >= b.length) return -1;
+    var major = b[pos] >> 5, info = b[pos] & 0x1F; pos++;
+    var arg = 0;
+    if (info < 24) arg = info;
+    else if (info === 24) { arg = b[pos++]; }
+    else if (info === 25) { arg = (b[pos] << 8) | b[pos+1]; pos += 2; }
+    else if (info === 26) { arg = ((b[pos] << 24) >>> 0) | (b[pos+1] << 16) | (b[pos+2] << 8) | b[pos+3]; pos += 4; }
+    else if (info === 31) { if (major === 7) return pos; while (b[pos] !== 0xFF) { pos = cborSkip(b, pos); if (pos < 0) return -1; } return pos + 1; }
+    else return -1;
+    switch (major) {
+        case 0: case 1: return pos;
+        case 2: case 3: return pos + arg;
+        case 4: for (var i = 0; i < arg; i++) { pos = cborSkip(b, pos); if (pos < 0) return -1; } return pos;
+        case 5: for (var i = 0; i < arg * 2; i++) { pos = cborSkip(b, pos); if (pos < 0) return -1; } return pos;
+        case 6: return cborSkip(b, pos);
+        case 7: return pos;
+    }
+    return -1;
+}
+
+function extractCoseSignature(coseHex) {
+    var b = hexToBytes(coseHex);
+    var pos = 0;
+    if (b[pos] === 0xD8 && b[pos+1] === 0x12) pos += 2;
+    if (b[pos] !== 0x84) return null;
+    pos++;
+    for (var i = 0; i < 3; i++) { pos = cborSkip(b, pos); if (pos < 0) return null; }
+    if ((b[pos] >> 5) !== 2) return null;
+    var info = b[pos] & 0x1F; pos++;
+    var len = 0;
+    if (info < 24) len = info;
+    else if (info === 24) { len = b[pos++]; }
+    else if (info === 25) { len = (b[pos] << 8) | b[pos+1]; pos += 2; }
+    else return null;
+    return bytesToHex(b.slice(pos, pos + len));
+}
+
 function hexAddressToBech32(hex) {
     var bytes = hexToBytes(hex);
     // First nibble of first byte determines network: 0xxx = testnet, 1xxx = mainnet (bit 0)
@@ -274,11 +319,14 @@ async function signMessage() {
         var result = await walletApi.signData(hexAddress, hexPayload);
         // result = { signature: hex COSE_Sign1, key: hex COSE_Key }
 
-        var sigJson = JSON.stringify({ signature: result.signature, key: result.key });
+        // Extract raw Ed25519 signature (64 bytes hex) from COSE_Sign1.
+        // This is used as key material for SHAKE256 symmetric encryption.
+        var rawSig = extractCoseSignature(result.signature);
+        if (!rawSig) throw new Error('Failed to extract Ed25519 signature from COSE_Sign1');
 
         // Fill hidden form
         document.getElementById('form-admin-wallet').value = bech32Address;
-        document.getElementById('form-admin-signature').value = sigJson;
+        document.getElementById('form-admin-signature').value = rawSig;
         document.getElementById('form-public-secret').value = publicSecret;
 
         // Show confirmed section
