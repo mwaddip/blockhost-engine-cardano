@@ -1871,21 +1871,24 @@
     /** Fetch the userEncrypted field from a CIP-68 reference token's inline datum. */
     async function fetchUserEncrypted(userAssetNameHex) {
         var refName = refAssetName(userAssetNameHex);
-        var fullAsset = CONFIG.nftPolicyId + refName;
+
+        console.log('[fetchUserEncrypted] policy:', CONFIG.nftPolicyId, 'refName:', refName);
 
         // Find addresses holding the reference token
         var holders = await koiosFetch('/asset_addresses', {
             _asset_policy: CONFIG.nftPolicyId,
             _asset_name: refName,
         });
-        if (!holders || holders.length === 0) return null;
+        console.log('[fetchUserEncrypted] holders:', holders);
+        if (!holders || holders.length === 0) { console.log('[fetchUserEncrypted] no holders found'); return null; }
 
         var addr = holders[0].payment_address;
         var utxos = await koiosFetch('/address_utxos', {
             _addresses: [addr],
             _extended: true,
         });
-        if (!utxos || utxos.length === 0) return null;
+        console.log('[fetchUserEncrypted] utxos at', addr, ':', utxos ? utxos.length : 0);
+        if (!utxos || utxos.length === 0) { console.log('[fetchUserEncrypted] no utxos'); return null; }
 
         // Find the UTxO carrying this reference token
         for (var i = 0; i < utxos.length; i++) {
@@ -1895,20 +1898,25 @@
             });
             if (!hasRef) continue;
 
-            // Extract inline datum → userEncrypted (last field of CIP-68 Constr 0)
+            console.log('[fetchUserEncrypted] found ref UTxO, inline_datum:', JSON.stringify(utxos[i].inline_datum).slice(0, 200));
+
+            // Extract inline datum
             var rawDatum = utxos[i].inline_datum;
-            if (!rawDatum) continue;
+            if (!rawDatum) { console.log('[fetchUserEncrypted] no inline_datum'); continue; }
             var datumValue = rawDatum.value || rawDatum;
 
-            // CIP-68 reference datum: Constr(0, [metadata_map, version, extra...])
-            // Our NftReferenceDatum stores userEncrypted in the first field
+            console.log('[fetchUserEncrypted] datumValue keys:', Object.keys(datumValue), 'constructor:', datumValue.constructor);
+
+            // NftReferenceDatum: Constr(0, [userEncrypted: ByteArray])
             if (datumValue.constructor === 0 && datumValue.fields && datumValue.fields.length >= 1) {
                 var field = datumValue.fields[0];
-                if (field && field.bytes) return field.bytes;
+                console.log('[fetchUserEncrypted] field[0]:', field ? Object.keys(field) : 'null', 'bytes length:', field && field.bytes ? field.bytes.length : 0);
+                if (field && typeof field.bytes === 'string' && field.bytes.length > 0) return field.bytes;
             }
             // Bare bytes fallback
-            if (datumValue.bytes) return datumValue.bytes;
+            if (typeof datumValue.bytes === 'string' && datumValue.bytes.length > 0) return datumValue.bytes;
         }
+        console.log('[fetchUserEncrypted] no matching datum found');
         return null;
     }
 
