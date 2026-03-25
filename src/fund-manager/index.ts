@@ -134,6 +134,8 @@ export async function runFundManager(): Promise<void> {
 
     const config = loadFundManagerConfig();
 
+    const pause = () => new Promise<void>((r) => setTimeout(r, 3000));
+
     // Step 1: Batch-collect subscription UTXOs to hot wallet
     try {
       await collectSubscriptions(
@@ -146,6 +148,8 @@ export async function runFundManager(): Promise<void> {
       console.error(`[FUND] Step 1 (collection) failed: ${err}`);
     }
 
+    await pause();
+
     // Steps 2-5: each wrapped so a single failure doesn't skip the rest
 
     try {
@@ -155,12 +159,16 @@ export async function runFundManager(): Promise<void> {
       console.error(`[FUND] Step 2 (hot wallet gas) failed: ${err}`);
     }
 
+    await pause();
+
     try {
       // Step 3: Top up server stablecoin buffer from hot wallet
       await topUpServerStablecoinBuffer(book, config);
     } catch (err) {
       console.error(`[FUND] Step 3 (stablecoin buffer) failed: ${err}`);
     }
+
+    await pause();
 
     try {
       // Step 4: Revenue shares (hot → dev/broker)
@@ -169,6 +177,8 @@ export async function runFundManager(): Promise<void> {
     } catch (err) {
       console.error(`[FUND] Step 4 (revenue shares) failed: ${err}`);
     }
+
+    await pause();
 
     try {
       // Step 5: Remainder to admin (hot → admin)
