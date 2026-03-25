@@ -122,10 +122,10 @@
                             </button>
                         </div>
                         <p style="font-size: 0.875rem; margin: 0 0 0.75rem;">
-                            Fund this wallet with ADA to continue. At least <strong>40 ADA</strong> recommended (validator deployment requires ~25 ADA for reference script UTXOs).
+                            Fund this wallet with ADA to continue. At least <strong>50 ADA</strong> recommended (4 reference scripts + collateral + NFT mint + plan creation).
                         </p>
                         <div style="display: flex; gap: 0.5rem; align-items: center;">
-                            <input type="number" id="topup-amount" step="1" min="2" value="40" style="width: 6rem;">
+                            <input type="number" id="topup-amount" step="1" min="2" value="50" style="width: 6rem;">
                             <span style="font-size: 0.875rem;">ADA</span>
                             <button type="button" class="btn btn-small btn-primary"
                                     onclick="topUpWallet('generate')" id="topup-btn">
@@ -166,10 +166,10 @@
                         </button>
                     </div>
                     <p style="font-size: 0.875rem; margin: 0 0 0.75rem;">
-                        Fund this wallet with ADA to continue. At least <strong>40 ADA</strong> recommended (validator deployment requires ~25 ADA for reference script UTXOs).
+                        Fund this wallet with ADA to continue. At least <strong>50 ADA</strong> recommended (4 reference scripts + collateral + NFT mint + plan creation).
                     </p>
                     <div style="display: flex; gap: 0.5rem; align-items: center;">
-                        <input type="number" id="import-topup-amount" step="1" min="2" value="40" style="width: 6rem;">
+                        <input type="number" id="import-topup-amount" step="1" min="2" value="50" style="width: 6rem;">
                         <span style="font-size: 0.875rem;">ADA</span>
                         <button type="button" class="btn btn-small btn-primary"
                                 onclick="topUpWallet('import')" id="import-topup-btn">
@@ -527,7 +527,7 @@ var _lastBalanceLovelace = { generate: 0, import: 0 };
 function getMinBalance() {
     var contractMode = document.querySelector('input[name="contract_mode"]:checked');
     // Existing validators don't need reference script deployment funds
-    return (contractMode && contractMode.value === 'existing') ? 15000000 : 40000000;
+    return (contractMode && contractMode.value === 'existing') ? 15000000 : 50000000;
 }
 
 function updateContinueButton() {
@@ -540,7 +540,7 @@ function updateContinueButton() {
         btn.title = '';
     } else {
         btn.disabled = true;
-        btn.title = 'Fund the deployer wallet with at least 40 ADA to continue (15 ADA when using existing validators)';
+        btn.title = 'Fund the deployer wallet with at least 50 ADA to continue (15 ADA when using existing validators)';
     }
 }
 

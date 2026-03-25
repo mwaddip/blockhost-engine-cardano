@@ -42,10 +42,13 @@ def generate_wallet(params):
         mnemonic = wallet["mnemonic"]
         address = wallet["address"]
 
-        # Save mnemonic to key file
+        # Save mnemonic to key file (root:blockhost 0640, same as deployer.key)
+        import grp
         with open(key_path, "w") as f:
             f.write(mnemonic)
-        os.chmod(key_path, 0o600)
+        gid = grp.getgrnam("blockhost").gr_gid
+        os.chown(key_path, 0, gid)
+        os.chmod(key_path, 0o640)
 
         return {"ok": True, "address": address}
     except Exception as e:
