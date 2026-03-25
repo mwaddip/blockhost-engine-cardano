@@ -194,7 +194,7 @@ function markNftMinted(nftTokenId: number, ownerWallet: string): void {
 import os
 from blockhost.vm_db import get_database
 db = get_database()
-db.mark_nft_minted(int(os.environ['NFT_TOKEN_ID']), os.environ['OWNER_WALLET'])
+db.set_nft_minted(int(os.environ['NFT_TOKEN_ID']), os.environ['OWNER_WALLET'])
 `;
   const result = spawnSync("python3", ["-c", script], {
     cwd: WORKING_DIR,
