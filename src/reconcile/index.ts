@@ -111,7 +111,7 @@ export async function runReconciliation(
           }
 
           transferred++;
-        } else if (vm.gecos_synced === false) {
+        } else if (!vm.gecos_synced) {
           // Ownership unchanged but previous GECOS write failed — retry
           console.log(`[RECONCILE] Retrying GECOS update for ${vm.vm_name}`);
           if (callUpdateGecos(vm.vm_name, vm.owner_wallet, vm.nft_token_id)) {
@@ -156,9 +156,9 @@ for vm in vms:
             'vm_name': vm.get('vm_name', ''),
             'owner_wallet': vm.get('wallet_address', vm.get('owner', '')),
             'nft_token_id': vm.get('nft_token_id'),
-            'nft_minted': vm.get('nft_minted', False),
+            'nft_minted': bool(vm.get('nft_minted')),
             'status': vm.get('status', ''),
-            'gecos_synced': vm.get('gecos_synced', True),
+            'gecos_synced': bool(vm.get('gecos_synced', True)),
         })
 print(json.dumps(result))
 `;
