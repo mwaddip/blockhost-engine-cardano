@@ -16,9 +16,8 @@
  * Config from web3-defaults.yaml (blockfrost_project_id, network, nft_policy_id).
  */
 
-import { isValidAddress } from "cmttk";
+import { isValidAddress, getProvider } from "cmttk";
 import { loadWeb3Config } from "../fund-manager/web3-config.js";
-import { getBlockfrost } from "../cardano/provider.js";
 import { findNftHolder } from "../nft/reference.js";
 
 function isNftId(arg: string): boolean {
@@ -58,22 +57,12 @@ async function main(): Promise<void> {
     }
     const address = other[0];
     const { blockfrostProjectId, network } = loadWeb3Config();
-    const client = getBlockfrost(blockfrostProjectId, network);
+    const provider = getProvider(network, blockfrostProjectId || undefined);
     try {
-      // Fetch first page only — we just need to know if any UTXOs exist.
-      const utxos = await client.addressesUtxos(address);
+      const utxos = await provider.fetchUtxos(address);
       process.exit(utxos.length > 0 ? 0 : 1);
-    } catch (err: unknown) {
-      // Blockfrost 404 = address not found (no UTXOs ever)
-      if (
-        typeof err === "object" &&
-        err !== null &&
-        "status_code" in err &&
-        (err as { status_code: number }).status_code === 404
-      ) {
-        process.exit(1);
-      }
-      throw err;
+    } catch {
+      process.exit(1);
     }
   }
 
@@ -101,10 +90,10 @@ async function main(): Promise<void> {
 
   if (walletAddr && nftId) {
     const { blockfrostProjectId, network, nftPolicyId } = loadWeb3Config();
-    const client = getBlockfrost(blockfrostProjectId, network);
+    const provider = getProvider(network, blockfrostProjectId || undefined);
 
     try {
-      const holder = await findNftHolder(client, nftPolicyId, parseInt(nftId, 10));
+      const holder = await findNftHolder(provider, nftPolicyId, parseInt(nftId, 10));
       process.exit(holder !== null && holder.toLowerCase() === walletAddr.toLowerCase() ? 0 : 1);
     } catch {
       process.exit(1);

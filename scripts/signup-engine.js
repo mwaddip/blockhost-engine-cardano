@@ -159,6 +159,121 @@
         return bytesToHex(result);
     }
 
+    // ── COSE_Sign1 signature extraction ────────────────────────────────────
+    //
+    // CIP-30 signData returns { signature: COSE_Sign1_hex, key: COSE_Key_hex }.
+    // COSE_Sign1 is CBOR: Tag(18) Array(4) [ protected, unprotected, payload, signature ].
+    // We need the raw Ed25519 signature (element 3, 64 bytes).
+
+    /** Skip one CBOR item starting at pos. Returns new pos, or -1 on error. */
+    function cborSkip(b, pos) {
+        if (pos >= b.length) return -1;
+        var major = b[pos] >> 5;
+        var info = b[pos] & 0x1F;
+        pos++;
+        var arg = 0;
+        if (info < 24) arg = info;
+        else if (info === 24) { arg = b[pos++]; }
+        else if (info === 25) { arg = (b[pos] << 8) | b[pos + 1]; pos += 2; }
+        else if (info === 26) { arg = ((b[pos] << 24) >>> 0) | (b[pos + 1] << 16) | (b[pos + 2] << 8) | b[pos + 3]; pos += 4; }
+        else if (info === 31) {
+            if (major === 7) return pos;
+            while (b[pos] !== 0xFF) { pos = cborSkip(b, pos); if (pos < 0) return -1; }
+            return pos + 1;
+        }
+        else return -1;
+        switch (major) {
+            case 0: case 1: return pos;
+            case 2: case 3: return pos + arg;
+            case 4: for (var i = 0; i < arg; i++) { pos = cborSkip(b, pos); if (pos < 0) return -1; } return pos;
+            case 5: for (var i = 0; i < arg * 2; i++) { pos = cborSkip(b, pos); if (pos < 0) return -1; } return pos;
+            case 6: return cborSkip(b, pos);
+            case 7: return pos;
+        }
+        return -1;
+    }
+
+    /** Extract the raw Ed25519 signature (64 bytes hex) from a COSE_Sign1 CBOR hex string. */
+    function extractCoseSignature(coseHex) {
+        var b = hexToBytes(coseHex);
+        var pos = 0;
+        // Skip optional CBOR tag 18
+        if (b[pos] === 0xD8 && b[pos + 1] === 0x12) pos += 2;
+        // Must be definite array(4)
+        if (b[pos] !== 0x84) return null;
+        pos++;
+        // Skip protected, unprotected, payload
+        for (var i = 0; i < 3; i++) { pos = cborSkip(b, pos); if (pos < 0) return null; }
+        // Read signature (byte string)
+        if ((b[pos] >> 5) !== 2) return null;
+        var info = b[pos] & 0x1F;
+        pos++;
+        var len = 0;
+        if (info < 24) len = info;
+        else if (info === 24) { len = b[pos++]; }
+        else if (info === 25) { len = (b[pos] << 8) | b[pos + 1]; pos += 2; }
+        else return null;
+        return bytesToHex(b.slice(pos, pos + len));
+    }
+
+    // ── SHAKE256 + AES-GCM symmetric decryption ────────────────────────────
+    //
+    // Matches the server-side symmetricEncrypt() in src/crypto.ts.
+    // Key derivation: SHAKE256(signatureBytes, 32 bytes)
+    // Wire format:    IV(12) + ciphertext + authTag(16)
+
+    var _shake256 = null;
+
+    /** Lazy-load SHAKE256 from noble-hashes CDN. */
+    async function ensureShake256() {
+        if (_shake256) return;
+        var mod = await import('https://esm.run/@noble/hashes@1.4.0/sha3');
+        _shake256 = mod.shake256;
+    }
+
+    /** Derive a 32-byte AES key from signature bytes using SHAKE256. */
+    function deriveSymmetricKey(signatureBytes) {
+        return _shake256(signatureBytes, { dkLen: 32 });
+    }
+
+    /** Decrypt AES-256-GCM ciphertext using a SHAKE256-derived key.
+     *  @param {Uint8Array} keyBytes - 32-byte AES key
+     *  @param {string} ciphertextHex - IV(12) + ciphertext + tag(16), hex encoded
+     *  @returns {Promise<string>} decrypted UTF-8 string
+     */
+    async function decryptAesGcm(keyBytes, ciphertextHex) {
+        var data = hexToBytes(ciphertextHex);
+        if (data.length < 28) throw new Error('Ciphertext too short');
+        var iv = data.slice(0, 12);
+        var ct = data.slice(12);
+        var key = await crypto.subtle.importKey('raw', keyBytes, { name: 'AES-GCM' }, false, ['decrypt']);
+        var decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv }, key, ct);
+        return new TextDecoder().decode(decrypted);
+    }
+
+    // ── CIP-68 NFT helpers ──────────────────────────────────────────────────
+
+    var CIP68_USER_PREFIX = '000de140';
+    var CIP68_REF_PREFIX = '000643b0';
+
+    /** Extract token ID (integer) from a CIP-68 user token asset name hex. */
+    function tokenIdFromAssetName(assetNameHex) {
+        if (assetNameHex.startsWith(CIP68_USER_PREFIX)) {
+            return parseInt(assetNameHex.slice(CIP68_USER_PREFIX.length), 16);
+        }
+        return null;
+    }
+
+    /** Build the (100) reference token asset name for a given user token asset name. */
+    function refAssetName(userAssetNameHex) {
+        return CIP68_REF_PREFIX + userAssetNameHex.slice(CIP68_USER_PREFIX.length);
+    }
+
+    // ── State for View My Servers / Admin ────────────────────────────────────
+
+    var userNfts = [];
+    var selectedNft = null;
+
     // ── Plan data (fetched from Koios) ─────────────────────────────────────
 
     /**
@@ -568,6 +683,14 @@
             // Also kick off plan loading if it hasn't happened yet
             if (plans.length === 0) loadPlans();
 
+            // Show View My Servers wallet mode and load NFTs
+            document.getElementById('servers-not-connected').classList.add('hidden');
+            loadUserNfts();
+
+            // Show admin commands section
+            document.getElementById('admin-not-connected').classList.add('hidden');
+            document.getElementById('admin-connected').classList.remove('hidden');
+
         } catch (err) {
             console.error('connectWallet error:', err);
             showStatus('subscribe-status', 'Wallet connection failed: ' + (err.message || err), 'error');
@@ -602,22 +725,18 @@
             var signResult = await api.signData(usedAddress, msgHex);
             // signResult = { signature: hex (COSE_Sign1), key: hex (COSE_Key) }
 
-            // ── Step B: ECIES encrypt the COSE signature with server pubkey ─
+            // ── Step B: ECIES encrypt the raw Ed25519 signature with server pubkey
             showStatus('subscribe-status', '<span class="spinner"></span>Encrypting credentials...', 'info');
 
-            // We encrypt the full COSE_Sign1 structure (hex string) so the server
-            // can verify the CIP-30 signature and extract the public key.
-            var fullEncrypted = await eciesEncrypt(
-                CONFIG.serverPublicKey,
-                JSON.stringify({ signature: signResult.signature, key: signResult.key })
-            );
-            // Truncate to test if size is the issue (93 bytes = 186 hex chars)
-            // ECIES wire: ephPub(65) + IV(12) + ciphertext + tag(16) = min 93 bytes
-            // Use first 186 hex chars to keep a valid-looking (but undecryptable) blob
-            var userEncryptedHex = await eciesEncrypt(
-                CONFIG.serverPublicKey,
-                JSON.stringify({ signature: signResult.signature, key: signResult.key })
-            );
+            // Extract the raw 64-byte Ed25519 signature from the COSE_Sign1 structure.
+            // The server uses this as key material for SHAKE256 → AES-GCM encryption
+            // of connection details.  The client uses the same signature to decrypt.
+            var rawSigHex = extractCoseSignature(signResult.signature);
+            if (!rawSigHex) throw new Error('Failed to extract Ed25519 signature from COSE_Sign1');
+            console.log('rawSigHex:', rawSigHex.length, 'chars (' + (rawSigHex.length / 2) + ' bytes)');
+
+            // ECIES-encrypt the raw signature hex so only the server can recover it.
+            var userEncryptedHex = await eciesEncrypt(CONFIG.serverPublicKey, rawSigHex);
             console.log('userEncryptedHex length:', userEncryptedHex.length, 'bytes:', userEncryptedHex.length / 2);
 
             updateStep(3, 'done');
@@ -634,14 +753,24 @@
             var addrBytes = hexToBytes(usedAddress);
             var subscriberKeyHash = bytesToHex(addrBytes.slice(1, 29)); // 28-byte payment key hash
 
-            // C.2  Compute beacon token name: sha256(plan_id_4bytes_BE ++ subscriber_key_hash)
+            // C.2  Get current block height for beacon uniqueness salt
             await ensureEcies(); // ensure _sha256 is loaded
+            var tipArr0 = await koiosFetch('/tip', null);
+            var creationHeight = 0;
+            if (tipArr0 && Array.isArray(tipArr0) && tipArr0.length > 0) {
+                creationHeight = tipArr0[0].block_no || 0;
+            }
+
+            // C.2b Compute beacon token name: sha256(plan_id_4BE ++ subscriber_key_hash ++ creation_height_4BE)
             var planIdBytes = new Uint8Array(4);
             new DataView(planIdBytes.buffer).setInt32(0, planId, false); // big-endian
             var keyHashBytes = hexToBytes(subscriberKeyHash);
-            var beaconPreimage = new Uint8Array(4 + keyHashBytes.length);
+            var heightBytes = new Uint8Array(4);
+            new DataView(heightBytes.buffer).setUint32(0, creationHeight, false); // big-endian
+            var beaconPreimage = new Uint8Array(4 + keyHashBytes.length + 4);
             beaconPreimage.set(planIdBytes, 0);
             beaconPreimage.set(keyHashBytes, 4);
+            beaconPreimage.set(heightBytes, 4 + keyHashBytes.length);
             var beaconName = bytesToHex(_sha256(beaconPreimage)); // 32 bytes = 64 hex chars
 
             console.log('beaconName:', beaconName);
@@ -682,6 +811,7 @@
                 payAssetName: payAssetName,
                 beaconPolicyId: CONFIG.beaconPolicyId,
                 userEncrypted: userEncryptedHex,
+                creationHeight: creationHeight,
             });
 
             console.log('datumCbor length:', datumCbor.length, 'bytes:', datumCbor.length / 2);
@@ -1013,6 +1143,7 @@
      *   payment_asset: Constr(0, [policy_id: Bytes, asset_name: Bytes]),
      *   beacon_policy_id: Bytes,
      *   user_encrypted: Bytes,
+     *   creation_height: Int,
      * ])
      */
     function encodePlutusSubscriptionDatum(d) {
@@ -1032,6 +1163,7 @@
             paymentAsset,
             cborBytesChunked(d.beaconPolicyId),
             cborBytesChunked(d.userEncrypted),
+            cborInt(d.creationHeight),
         ];
 
         var cbor = plutusConstr(0, fields);
@@ -1644,6 +1776,352 @@
         // Koios returns the hash as plain text (may have quotes)
         return result.replace(/"/g, '').trim();
     }
+
+    // ── Tab switching ─────────────────────────────────────────────────────
+
+    window.switchTab = function (tab) {
+        document.getElementById('tab-wallet').classList.toggle('active', tab === 'wallet');
+        document.getElementById('tab-offline').classList.toggle('active', tab === 'offline');
+        document.getElementById('mode-wallet').classList.toggle('hidden', tab !== 'wallet');
+        document.getElementById('mode-offline').classList.toggle('hidden', tab !== 'offline');
+    };
+
+    // ── NFT loading (wallet mode) ───────────────────────────────────────
+
+    async function loadUserNfts() {
+        if (!CONFIG.nftPolicyId || !usedAddress || !api) return;
+
+        document.getElementById('servers-not-connected').classList.add('hidden');
+        document.getElementById('servers-loading').classList.remove('hidden');
+        document.getElementById('server-list').classList.add('hidden');
+        document.getElementById('servers-empty').classList.add('hidden');
+        document.getElementById('servers-decrypt').classList.add('hidden');
+        document.getElementById('connection-result').classList.add('hidden');
+
+        try {
+            // Query wallet UTXOs for CIP-68 user tokens under the NFT policy
+            var rawUtxos = await koiosFetch('/address_utxos', {
+                _addresses: [hexAddressToBech32(usedAddress)],
+                _extended: true,
+            });
+            if (!rawUtxos || !Array.isArray(rawUtxos)) rawUtxos = [];
+
+            userNfts = [];
+            for (var u = 0; u < rawUtxos.length; u++) {
+                var assetList = rawUtxos[u].asset_list;
+                if (!assetList) continue;
+                for (var a = 0; a < assetList.length; a++) {
+                    var asset = assetList[a];
+                    if (asset.policy_id !== CONFIG.nftPolicyId) continue;
+                    if (!asset.asset_name || !asset.asset_name.startsWith(CIP68_USER_PREFIX)) continue;
+                    var tid = tokenIdFromAssetName(asset.asset_name);
+                    if (tid === null) continue;
+                    userNfts.push({
+                        tokenId: tid,
+                        name: 'Server #' + tid,
+                        userAssetName: asset.asset_name,
+                    });
+                }
+            }
+
+            document.getElementById('servers-loading').classList.add('hidden');
+
+            if (userNfts.length > 0) {
+                document.getElementById('server-list').classList.remove('hidden');
+                renderNftList();
+            } else {
+                document.getElementById('servers-empty').classList.remove('hidden');
+            }
+        } catch (err) {
+            console.error('Error loading NFTs:', err);
+            document.getElementById('servers-loading').classList.add('hidden');
+            document.getElementById('servers-empty').classList.remove('hidden');
+            document.getElementById('servers-empty').innerHTML =
+                '<p class="step-desc">Error loading NFTs: ' + (err.message || err) + '</p>';
+        }
+    }
+
+    function renderNftList() {
+        var container = document.getElementById('server-list');
+        container.innerHTML = '';
+        userNfts.forEach(function (nft, index) {
+            var card = document.createElement('div');
+            card.className = 'server-card' + (index === 0 ? ' selected' : '');
+            card.innerHTML =
+                '<div class="server-card-header">' +
+                    '<span class="server-card-title">' + nft.name + '</span>' +
+                    '<span class="server-card-id">Token #' + nft.tokenId + '</span>' +
+                '</div>';
+            card.addEventListener('click', function () { selectNft(index); });
+            container.appendChild(card);
+        });
+        if (userNfts.length > 0) selectNft(0);
+    }
+
+    function selectNft(index) {
+        selectedNft = userNfts[index];
+        document.querySelectorAll('.server-card').forEach(function (card, i) {
+            card.classList.toggle('selected', i === index);
+        });
+        document.getElementById('servers-decrypt').classList.remove('hidden');
+        document.getElementById('connection-result').classList.add('hidden');
+        document.getElementById('decrypt-wallet-status').innerHTML = '';
+    }
+
+    /** Fetch the userEncrypted field from a CIP-68 reference token's inline datum. */
+    async function fetchUserEncrypted(userAssetNameHex) {
+        var refName = refAssetName(userAssetNameHex);
+        var fullAsset = CONFIG.nftPolicyId + refName;
+
+        // Find addresses holding the reference token
+        var holders = await koiosFetch('/asset_addresses', {
+            _asset_policy: CONFIG.nftPolicyId,
+            _asset_name: refName,
+        });
+        if (!holders || holders.length === 0) return null;
+
+        var addr = holders[0].payment_address;
+        var utxos = await koiosFetch('/address_utxos', {
+            _addresses: [addr],
+            _extended: true,
+        });
+        if (!utxos || utxos.length === 0) return null;
+
+        // Find the UTxO carrying this reference token
+        for (var i = 0; i < utxos.length; i++) {
+            var assets = utxos[i].asset_list || [];
+            var hasRef = assets.some(function (a) {
+                return a.policy_id === CONFIG.nftPolicyId && a.asset_name === refName;
+            });
+            if (!hasRef) continue;
+
+            // Extract inline datum → userEncrypted (last field of CIP-68 Constr 0)
+            var rawDatum = utxos[i].inline_datum;
+            if (!rawDatum) continue;
+            var datumValue = rawDatum.value || rawDatum;
+
+            // CIP-68 reference datum: Constr(0, [metadata_map, version, extra...])
+            // Our NftReferenceDatum stores userEncrypted in the first field
+            if (datumValue.constructor === 0 && datumValue.fields && datumValue.fields.length >= 1) {
+                var field = datumValue.fields[0];
+                if (field && field.bytes) return field.bytes;
+            }
+            // Bare bytes fallback
+            if (datumValue.bytes) return datumValue.bytes;
+        }
+        return null;
+    }
+
+    // ── Decrypt (wallet mode) ───────────────────────────────────────────
+
+    var btnDecryptWallet = document.getElementById('btn-decrypt-wallet');
+    if (btnDecryptWallet) btnDecryptWallet.addEventListener('click', async function () {
+        if (!selectedNft || !api) return;
+
+        var btn = document.getElementById('btn-decrypt-wallet');
+        var statusEl = document.getElementById('decrypt-wallet-status');
+
+        try {
+            btn.disabled = true;
+
+            showStatus('decrypt-wallet-status', '<span class="spinner"></span>Fetching NFT data...', 'info');
+            var userEncHex = await fetchUserEncrypted(selectedNft.userAssetName);
+            if (!userEncHex) throw new Error('No encrypted data found in NFT #' + selectedNft.tokenId);
+
+            showStatus('decrypt-wallet-status', '<span class="spinner"></span>Sign the message in your wallet...', 'info');
+            var msgHex = bytesToHex(new TextEncoder().encode(CONFIG.publicSecret));
+            var signResult = await api.signData(usedAddress, msgHex);
+
+            var rawSig = extractCoseSignature(signResult.signature);
+            if (!rawSig) throw new Error('Failed to extract signature from COSE_Sign1');
+
+            showStatus('decrypt-wallet-status', '<span class="spinner"></span>Decrypting...', 'info');
+            await ensureShake256();
+            var keyBytes = deriveSymmetricKey(hexToBytes(rawSig));
+            var decrypted = await decryptAesGcm(keyBytes, userEncHex);
+
+            document.getElementById('connection-info').textContent = decrypted;
+            document.getElementById('connection-result').classList.remove('hidden');
+            statusEl.innerHTML = '';
+        } catch (err) {
+            console.error('Decrypt error:', err);
+            showStatus('decrypt-wallet-status', err.message || 'Decryption failed', 'error');
+        } finally {
+            btn.disabled = false;
+        }
+    });
+
+    // ── NFT lookup (offline mode) ───────────────────────────────────────
+
+    var btnLookupNft = document.getElementById('btn-lookup-nft');
+    if (btnLookupNft) btnLookupNft.addEventListener('click', async function () {
+        var statusEl = document.getElementById('offline-lookup-status');
+        var btn = document.getElementById('btn-lookup-nft');
+
+        if (!CONFIG.nftPolicyId) {
+            showStatus('offline-lookup-status', 'NFT policy not configured', 'error');
+            return;
+        }
+
+        var tokenId = document.getElementById('offline-token-id').value;
+        if (!tokenId) {
+            showStatus('offline-lookup-status', 'Please enter a token ID', 'error');
+            return;
+        }
+
+        try {
+            btn.disabled = true;
+            showStatus('offline-lookup-status', '<span class="spinner"></span>Querying NFT on-chain...', 'info');
+
+            var idPadded = parseInt(tokenId, 10).toString(16).padStart(8, '0');
+            var userAssetHex = CIP68_USER_PREFIX + idPadded;
+
+            var userEncHex = await fetchUserEncrypted(userAssetHex);
+            if (!userEncHex) {
+                showStatus('offline-lookup-status', 'No encrypted data found for token #' + tokenId, 'error');
+                return;
+            }
+
+            window._offlineNftData = { tokenId: tokenId, userEncrypted: userEncHex };
+
+            showStatus('offline-lookup-status',
+                'Found encrypted data for token #' + tokenId + ' (' + userEncHex.length + ' hex chars).', 'success');
+
+            document.getElementById('offline-public-secret').textContent = CONFIG.publicSecret;
+            document.getElementById('offline-encrypted-data').textContent = userEncHex;
+            document.getElementById('offline-cli-instructions').innerHTML =
+                'Sign the publicSecret message with your Ed25519 payment key and paste the 64-byte signature (128 hex chars) below.<br><br>' +
+                'Using cardano-cli:<br>' +
+                '<code>cardano-cli transaction sign-data \\\n' +
+                '  --signing-key-file payment.skey \\\n' +
+                '  --data "' + CONFIG.publicSecret + '"</code>';
+            document.getElementById('offline-nft-info').classList.remove('hidden');
+        } catch (err) {
+            console.error('NFT lookup error:', err);
+            showStatus('offline-lookup-status', 'Lookup failed: ' + (err.message || err), 'error');
+        } finally {
+            btn.disabled = false;
+        }
+    });
+
+    // ── Decrypt (offline mode) ──────────────────────────────────────────
+
+    var btnDecryptOffline = document.getElementById('btn-decrypt-offline');
+    if (btnDecryptOffline) btnDecryptOffline.addEventListener('click', async function () {
+        var statusEl = document.getElementById('decrypt-offline-status');
+        var sigInput = document.getElementById('offline-signature').value.trim().replace(/^0x/, '');
+
+        if (!sigInput) {
+            showStatus('decrypt-offline-status', 'Please paste your Ed25519 signature (hex)', 'error');
+            return;
+        }
+        if (!window._offlineNftData) {
+            showStatus('decrypt-offline-status', 'Please lookup an NFT first', 'error');
+            return;
+        }
+
+        try {
+            showStatus('decrypt-offline-status', '<span class="spinner"></span>Decrypting...', 'info');
+            await ensureShake256();
+            var sigBytes = hexToBytes(sigInput);
+            var keyBytes = deriveSymmetricKey(sigBytes);
+            var decrypted = await decryptAesGcm(keyBytes, window._offlineNftData.userEncrypted);
+
+            document.getElementById('offline-connection-info').textContent = decrypted;
+            document.getElementById('offline-connection-result').classList.remove('hidden');
+            statusEl.innerHTML = '';
+        } catch (err) {
+            console.error('Decrypt error:', err);
+            showStatus('decrypt-offline-status', 'Decryption failed. Make sure you signed the correct message with the correct key.', 'error');
+        }
+    });
+
+    // ── Admin Commands ───────────────────────────────────────────────────
+    //
+    // Protocol: transaction metadata label 7368
+    // Payload: UTF-8("{nonce} {command}") + HMAC-SHA256(sharedKey, message)[:16]
+    // SharedKey: SHAKE256(Ed25519 signature of publicSecret)
+    //
+    // The command is submitted as a Cardano transaction with metadata.
+    // The server scans admin wallet transactions for label 7368.
+
+    var _adminNonce = (function () {
+        var chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+        var nonce = '';
+        var rand = crypto.getRandomValues(new Uint8Array(3));
+        for (var i = 0; i < 3; i++) nonce += chars[rand[i] % chars.length];
+        return nonce;
+    })();
+
+    var btnSendCommand = document.getElementById('btn-send-command');
+    if (btnSendCommand) btnSendCommand.addEventListener('click', async function () {
+        var btn = document.getElementById('btn-send-command');
+        var statusEl = document.getElementById('command-status');
+        var commandInput = document.getElementById('command-input').value.trim();
+
+        if (!commandInput) {
+            showStatus('command-status', 'Please enter a command', 'error');
+            return;
+        }
+        if (!api) {
+            showStatus('command-status', 'Please connect your wallet first', 'error');
+            return;
+        }
+
+        try {
+            btn.disabled = true;
+
+            var message = _adminNonce + ' ' + commandInput;
+
+            // Sign publicSecret to derive shared key
+            showStatus('command-status', '<span class="spinner"></span>Sign the message in your wallet...', 'info');
+            var msgHex = bytesToHex(new TextEncoder().encode(CONFIG.publicSecret));
+            var signResult = await api.signData(usedAddress, msgHex);
+
+            var rawSig = extractCoseSignature(signResult.signature);
+            if (!rawSig) throw new Error('Failed to extract signature from COSE_Sign1');
+
+            await ensureShake256();
+            var sharedKey = deriveSymmetricKey(hexToBytes(rawSig));
+
+            // Compute HMAC-SHA256(sharedKey, message)[:16]
+            showStatus('command-status', '<span class="spinner"></span>Computing HMAC...', 'info');
+            var cryptoKey = await crypto.subtle.importKey(
+                'raw', sharedKey, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+            var messageBytes = new TextEncoder().encode(message);
+            var hmacFull = await crypto.subtle.sign('HMAC', cryptoKey, messageBytes);
+            var hmac16 = new Uint8Array(hmacFull).slice(0, 16);
+
+            // Build payload: message_bytes + hmac_suffix(16)
+            var payload = new Uint8Array(messageBytes.length + 16);
+            payload.set(messageBytes, 0);
+            payload.set(hmac16, messageBytes.length);
+
+            var payloadHex = bytesToHex(payload);
+
+            console.log('Admin command payload:', message, '(' + payload.length + ' bytes)');
+
+            showStatus('command-status',
+                'Payload ready (' + payload.length + ' bytes).<br>' +
+                'Transaction metadata submission (label 7368) is not yet implemented in the browser.<br>' +
+                '<div class="code-block" style="margin-top:0.5rem">' + payloadHex + '</div>', 'info');
+
+            // Rotate nonce for next command
+            _adminNonce = (function () {
+                var chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+                var nonce = '';
+                var rand = crypto.getRandomValues(new Uint8Array(3));
+                for (var i = 0; i < 3; i++) nonce += chars[rand[i] % chars.length];
+                return nonce;
+            })();
+
+        } catch (err) {
+            console.error('Command error:', err);
+            showStatus('command-status', err.message || 'Failed to send command', 'error');
+        } finally {
+            btn.disabled = false;
+        }
+    });
 
     // ── Initialise ────────────────────────────────────────────────────────
 

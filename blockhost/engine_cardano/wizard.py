@@ -443,6 +443,7 @@ def get_post_finalization_steps() -> list[tuple]:
     """
     return [
         ("revenue_share", "Configuring revenue sharing", finalize_revenue_share),
+        ("collateral", "Setting up Plutus collateral UTxO", finalize_collateral),
         ("mint_nft", "Minting admin credential NFT", finalize_mint_nft),
         ("plan", "Creating subscription plan", finalize_plan),
     ]
@@ -962,6 +963,42 @@ def finalize_chain_config(config: dict) -> tuple[bool, Optional[str]]:
 # ---------------------------------------------------------------------------
 # Post-finalization step functions
 # ---------------------------------------------------------------------------
+
+
+def finalize_collateral(config: dict) -> tuple[bool, Optional[str]]:
+    """Create an ADA-only UTxO for Plutus script collateral.
+
+    Sends 5 ADA from the deployer wallet to itself, producing a clean
+    UTxO with no native tokens.  This UTxO is required as collateral
+    for any Plutus validator interaction (minting, collecting, etc.).
+
+    Runs after the addressbook is initialized (revenue_share step) so
+    the "server" role is available for bw send.
+    """
+    try:
+        blockchain = config.get("blockchain", {})
+        env = _bw_env(blockchain)
+
+        result = subprocess.run(
+            ["bw", "send", "5", "ada", "server", "server"],
+            capture_output=True,
+            text=True,
+            timeout=600,  # 10 min — Cardano tx confirmation
+            env=env,
+        )
+
+        if result.returncode != 0:
+            return False, f"Collateral creation failed: {result.stderr or result.stdout}"
+
+        tx_hash = result.stdout.strip()
+        config["_step_result_collateral"] = {"tx_hash": tx_hash}
+        return True, None
+    except FileNotFoundError:
+        return False, "bw CLI not found"
+    except subprocess.TimeoutExpired:
+        return False, "Collateral creation timed out (waited for Cardano confirmation)"
+    except Exception as e:
+        return False, str(e)
 
 
 def finalize_mint_nft(config: dict) -> tuple[bool, Optional[str]]:

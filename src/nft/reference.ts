@@ -5,7 +5,7 @@
  * via Blockfrost asset address queries.
  */
 
-import type { BlockFrostAPI } from "../cardano/provider.js";
+import type { CardanoProvider } from "cmttk";
 import type { NftReferenceDatum } from "../cardano/types.js";
 import { referenceTokenAssetName, userTokenAssetName } from "./mint.js";
 
@@ -21,7 +21,7 @@ import { referenceTokenAssetName, userTokenAssetName } from "./mint.js";
  * Returns null if the token does not exist or has no inline datum.
  */
 export async function readReferenceDatum(
-  client: BlockFrostAPI,
+  provider: CardanoProvider,
   nftPolicyId: string,
   tokenId: number,
 ): Promise<NftReferenceDatum | null> {
@@ -30,22 +30,25 @@ export async function readReferenceDatum(
 
   try {
     // Find addresses holding this reference token
-    const addresses = await client.assetsAddresses(asset);
+    const addresses = await provider.fetchAssetAddresses(asset);
     if (addresses.length === 0) return null;
 
     // The reference token must be at exactly one address (the script address)
     const addr = addresses[0]!.address;
-    const utxos = await client.addressesUtxosAssetAll(addr, asset);
-    if (utxos.length === 0) return null;
+    const rawUtxos = await provider.fetchUtxos(addr, asset);
+    if (rawUtxos.length === 0) return null;
 
-    // Extract the inline datum from the first matching UTXO
-    const utxo = utxos[0] as Record<string, unknown>;
-    if (!utxo["inline_datum"]) return null;
+    // Extract the inline datum from the first matching UTXO.
+    // Koios: inline_datum = { bytes, value } — we want "value".
+    // Blockfrost: inline_datum is the Plutus data directly.
+    const utxo = rawUtxos[0] as Record<string, unknown>;
+    const rawDatum = utxo["inline_datum"] as Record<string, unknown> | null;
+    if (!rawDatum) return null;
+    const datum = "value" in rawDatum ? rawDatum["value"] : rawDatum;
 
-    return parseNftReferenceDatum(utxo["inline_datum"]);
-  } catch (err: unknown) {
-    if (isNotFound(err)) return null;
-    throw err;
+    return parseNftReferenceDatum(datum);
+  } catch {
+    return null;
   }
 }
 
@@ -58,20 +61,19 @@ export async function readReferenceDatum(
  * Returns the bech32 address of the holder, or null if not found.
  */
 export async function findNftHolder(
-  client: BlockFrostAPI,
+  provider: CardanoProvider,
   nftPolicyId: string,
   tokenId: number,
 ): Promise<string | null> {
   const asset = nftPolicyId + userTokenAssetName(tokenId);
 
   try {
-    const addresses = await client.assetsAddresses(asset);
+    const addresses = await provider.fetchAssetAddresses(asset);
     if (addresses.length === 0) return null;
     // User token is fungible-quantity-1 so only one address can hold it
     return addresses[0]!.address;
-  } catch (err: unknown) {
-    if (isNotFound(err)) return null;
-    throw err;
+  } catch {
+    return null;
   }
 }
 
@@ -114,13 +116,3 @@ function parseNftReferenceDatum(inlineDatum: unknown): NftReferenceDatum | null 
   }
 }
 
-// ── Utility ───────────────────────────────────────────────────────────────────
-
-function isNotFound(err: unknown): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    "status_code" in err &&
-    (err as { status_code: number }).status_code === 404
-  );
-}

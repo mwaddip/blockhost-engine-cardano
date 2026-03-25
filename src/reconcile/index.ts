@@ -15,7 +15,7 @@
  * attention).
  */
 
-import type { BlockFrostAPI } from "../cardano/provider.js";
+import type { CardanoProvider } from "cmttk";
 import { spawnSync } from "child_process";
 import { findNftHolder } from "../nft/reference.js";
 import { getCommand } from "../provisioner.js";
@@ -48,7 +48,7 @@ let reconcileInProgress = false;
  * returns immediately without doing any work.
  */
 export async function runReconciliation(
-  client: BlockFrostAPI,
+  provider: CardanoProvider,
   nftPolicyId: string,
 ): Promise<void> {
   if (reconcileInProgress) {
@@ -75,7 +75,7 @@ export async function runReconciliation(
       if (vm.nft_token_id === null) continue;
 
       try {
-        const currentHolder = await findNftHolder(client, nftPolicyId, vm.nft_token_id);
+        const currentHolder = await findNftHolder(provider, nftPolicyId, vm.nft_token_id);
 
         if (currentHolder === null) {
           if (vm.nft_minted) {

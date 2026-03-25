@@ -206,6 +206,39 @@
         .tx-link { color: var(--primary); text-decoration: none; word-break: break-all; }
         .tx-link:hover { text-decoration: underline; }
         .divider { border-top: 1px solid var(--border); margin: 1.5rem 0; }
+        .section-title { font-size: 1.25rem; font-weight: 600; margin-bottom: 0.5rem; text-align: center; }
+        .section-subtitle { color: var(--text-muted); text-align: center; margin-bottom: 1.5rem; font-size: 0.875rem; }
+        .tabs { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+        .tab {
+            flex: 1; padding: 0.5rem; border: 1px solid var(--border); border-radius: 8px;
+            background: var(--bg); color: var(--text-muted); cursor: pointer; text-align: center; font-size: 0.875rem;
+        }
+        .tab.active { background: var(--primary); color: white; border-color: var(--primary); }
+        .tab:hover:not(.active) { background: var(--surface-hover); }
+        .server-card {
+            background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+            padding: 1rem; margin-bottom: 0.75rem; cursor: pointer;
+        }
+        .server-card:hover { border-color: var(--primary); }
+        .server-card.selected { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 10%, var(--bg)); }
+        .server-card-header { display: flex; justify-content: space-between; align-items: center; }
+        .server-card-title { font-weight: 600; }
+        .server-card-id { color: var(--text-muted); font-size: 0.875rem; }
+        .connection-info {
+            background: var(--bg); border: 1px solid var(--success); border-radius: 8px;
+            padding: 1rem; font-family: monospace; font-size: 0.875rem; white-space: pre-wrap; word-break: break-all;
+        }
+        .code-block {
+            background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+            padding: 1rem; font-family: monospace; font-size: 0.75rem; white-space: pre-wrap; word-break: break-all;
+            margin-bottom: 0.75rem;
+        }
+        textarea {
+            width: 100%; padding: 0.75rem; border: 1px solid var(--border); border-radius: 8px;
+            background: var(--bg); color: var(--text); font-family: monospace; font-size: 0.875rem;
+            min-height: 60px; resize: vertical; margin-bottom: 0.75rem;
+        }
+        textarea:focus { outline: none; border-color: var(--primary); }
     </style>
 </head>
 <body>
@@ -286,6 +319,124 @@
             </div>
             <div class="status success" id="result-content">
                 Transaction submitted. Your server will be ready shortly.
+            </div>
+        </div>
+
+        <!-- Divider -->
+        <div class="divider"></div>
+
+        <!-- View My Servers Section -->
+        <div class="section-title">View My Servers</div>
+        <p class="section-subtitle">Decrypt your server connection details from your access NFT</p>
+
+        <div class="card" id="step-servers">
+            <div class="tabs">
+                <div class="tab active" id="tab-wallet" onclick="switchTab('wallet')">Use Wallet</div>
+                <div class="tab" id="tab-offline" onclick="switchTab('offline')">Offline Mode</div>
+            </div>
+
+            <!-- Wallet Mode -->
+            <div id="mode-wallet">
+                <div id="servers-not-connected">
+                    <p class="step-desc">Connect your wallet above to view your servers</p>
+                </div>
+                <div id="servers-loading" class="hidden">
+                    <p><span class="spinner"></span>Loading your NFTs...</p>
+                </div>
+                <div id="servers-empty" class="hidden">
+                    <p class="step-desc">
+                        No access NFTs found for your wallet. Purchase a subscription above to get started.
+                    </p>
+                </div>
+                <div id="server-list" class="hidden"></div>
+                <div id="servers-decrypt" class="hidden">
+                    <button id="btn-decrypt-wallet">Sign to Decrypt Connection Info</button>
+                    <div id="decrypt-wallet-status"></div>
+                </div>
+                <div id="connection-result" class="hidden">
+                    <label>Connection Details</label>
+                    <div class="connection-info" id="connection-info"></div>
+                </div>
+            </div>
+
+            <!-- Offline Mode -->
+            <div id="mode-offline" class="hidden">
+                <p class="step-desc" style="margin-bottom: 1rem;">
+                    For users who prefer not to connect a browser wallet. Enter your token ID to look up your NFT.
+                </p>
+
+                <div class="form-group">
+                    <label for="offline-token-id">Token ID</label>
+                    <input type="number" id="offline-token-id" placeholder="e.g., 1" min="0">
+                </div>
+
+                <button id="btn-lookup-nft" class="btn-secondary">Lookup NFT</button>
+                <div id="offline-lookup-status"></div>
+
+                <div id="offline-nft-info" class="hidden" style="margin-top: 1rem;">
+                    <div class="form-group">
+                        <label>Message to Sign</label>
+                        <div class="code-block" id="offline-public-secret"></div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Encrypted Data (hex)</label>
+                        <div class="code-block" id="offline-encrypted-data" style="max-height: 100px; overflow-y: auto;"></div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Signing Instructions</label>
+                        <div class="code-block" id="offline-cli-instructions"></div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="offline-signature">Paste Your Ed25519 Signature (hex, 128 chars)</label>
+                        <textarea id="offline-signature" placeholder="Hex-encoded Ed25519 signature (64 bytes)..."></textarea>
+                    </div>
+
+                    <button id="btn-decrypt-offline">Decrypt Connection Info</button>
+                    <div id="decrypt-offline-status"></div>
+
+                    <div id="offline-connection-result" class="hidden" style="margin-top: 1rem;">
+                        <label>Connection Details</label>
+                        <div class="connection-info" id="offline-connection-info"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Divider -->
+        <div class="divider"></div>
+
+        <!-- Send Admin Command Section -->
+        <div class="section-title">Send Command</div>
+        <p class="section-subtitle">Send authenticated admin commands to the server</p>
+
+        <div class="card" id="admin-command-card">
+            <div id="admin-not-connected">
+                <p class="step-desc">
+                    Connect your wallet above to send commands. Only the configured admin wallet can execute commands.
+                </p>
+            </div>
+
+            <div id="admin-connected" class="hidden">
+                <div class="form-group">
+                    <label for="command-input">Command</label>
+                    <input type="text" id="command-input" placeholder="e.g. letmein 2a01:abcd::243">
+                </div>
+
+                <button id="btn-send-command">Sign & Send Command</button>
+                <div id="command-status"></div>
+
+                <div id="command-result" class="hidden" style="margin-top: 1rem;">
+                    <div class="status success">
+                        <p><strong>Command Sent!</strong></p>
+                        <p id="command-tx-info"></p>
+                        <p style="margin-top: 0.5rem; font-size: 0.875rem;">
+                            The server will process this command within the next few blocks.
+                        </p>
+                    </div>
+                </div>
             </div>
         </div>
     </div>

@@ -3,8 +3,9 @@
  */
 
 export interface FundManagerState {
-  last_fund_cycle: number;      // ms timestamp
-  last_gas_check: number;       // ms timestamp (kept for compat, less relevant on Cardano)
+  last_fund_cycle: number;        // ms timestamp
+  last_gas_check: number;         // ms timestamp (kept for compat, less relevant on Cardano)
+  last_collateral_check: number;  // ms timestamp
   hot_wallet_generated: boolean;
 }
 

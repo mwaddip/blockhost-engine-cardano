@@ -1,12 +1,20 @@
 /**
  * Beacon UTXO scanner — core of subscription change detection.
  *
- * Queries Blockfrost for all UTXOs at the subscription validator address,
- * filters for those carrying a beacon token under the beacon policy, parses
- * their inline datums, and returns a diff against the previously known state.
+ * Queries Koios for all UTXOs carrying beacon tokens, parses their inline
+ * datums, and returns a diff against the previously known state.
+ *
+ * Removal is guarded by a two-phase confirmation process:
+ *   1. Known beacons are only checked for removal every VERIFY_INTERVAL
+ *      (2h prod / 1min testing). Regular 30s scans ignore absent beacons.
+ *   2. When a beacon is absent during verification, it enters a pending
+ *      removal state.  It must be absent for CONFIRM_COUNT consecutive
+ *      checks at CONFIRM_INTERVAL (2min prod / 10s testing) before the
+ *      scanner emits a REMOVED event.
+ *   3. If the beacon reappears in any scan (including regular discovery
+ *      scans between confirmations), the pending removal is cancelled.
  */
 
-import { BlockFrostAPI } from "../cardano/provider.js";
 import type { SubscriptionDatum } from "../cardano/types.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -54,10 +62,40 @@ type PlutusValue =
   | { list: PlutusValue[] }
   | { map: { k: PlutusValue; v: PlutusValue }[] };
 
+// ── Testing mode ─────────────────────────────────────────────────────────────
+
+import * as fs from "fs";
+const _testingMode = fs.existsSync("/etc/blockhost/.testing-mode");
+
+// ── Removal confirmation intervals ──────────────────────────────────────────
+//
+// Known beacons are only checked for removal during periodic verification
+// passes, not every poll.  When absent, multiple consecutive confirmations
+// are required before the scanner emits REMOVED.
+
+/** How often to check known beacons for removal (2h prod / 1min testing) */
+const VERIFY_INTERVAL_MS = _testingMode ? 60_000 : 2 * 60 * 60 * 1000;
+
+/** Minimum gap between consecutive confirmation checks (2min prod / 10s testing) */
+const CONFIRM_INTERVAL_MS = _testingMode ? 10_000 : 2 * 60 * 1000;
+
+/** Consecutive absent checks required before emitting REMOVED */
+const CONFIRM_COUNT = 3;
+
 // ── In-memory state ──────────────────────────────────────────────────────────
 
 /** Map of beacon name → subscription, representing the last-known chain state */
 const knownSubscriptions = new Map<string, TrackedSubscription>();
+
+/** Beacons absent during verification, pending confirmed removal */
+const pendingRemovals = new Map<string, {
+  firstMissAt: number;
+  lastCheckAt: number;
+  missCount: number;
+}>();
+
+/** Timestamp of last verification pass */
+let lastVerifyAt = 0;
 
 /** Load known beacon names from vms.json on startup to prevent re-provisioning */
 let _stateLoaded = false;
@@ -68,7 +106,6 @@ function loadKnownBeacons(): void {
     const dbPath = process.env["BLOCKHOST_STATE_DIR"]
       ? `${process.env["BLOCKHOST_STATE_DIR"]}/vms.json`
       : "/var/lib/blockhost/vms.json";
-    const fs = require("fs") as typeof import("fs");
     if (!fs.existsSync(dbPath)) return;
     const db = JSON.parse(fs.readFileSync(dbPath, "utf8"));
     const vms = db.vms ?? {};
@@ -113,8 +150,6 @@ interface BlockfrostUtxo {
  * the known state.  Updates the known state in-place before returning.
  */
 export async function scanBeacons(
-  _client: BlockFrostAPI,
-  _validatorAddress: string,
   beaconPolicyId: string,
   network: string = "preprod",
 ): Promise<ScanDiff> {
@@ -228,28 +263,74 @@ export async function scanBeacons(
 
   // ── Compute diff ─────────────────────────────────────────────────────────
   const diff: ScanDiff = { created: [], removed: [], extended: [] };
+  const now = Date.now();
+  const isVerifyTime = now - lastVerifyAt >= VERIFY_INTERVAL_MS;
 
+  // Detect created and extended
   for (const [name, current] of currentBeacons) {
     const known = knownSubscriptions.get(name);
     if (!known) {
-      // New beacon we haven't seen before
       diff.created.push(current);
     } else if (known.utxoRef !== current.utxoRef) {
-      // Same beacon token, different UTXO → subscriber extended (spend+recreate)
       diff.extended.push({ old: known, new: current });
     }
-    // Same beacon, same UTXO ref → nothing changed; skip
+
+    // Beacon is present — cancel any pending removal
+    if (pendingRemovals.has(name)) {
+      console.log(`[SCANNER] Beacon ${name.slice(0, 16)}… reappeared — cancelling pending removal`);
+      pendingRemovals.delete(name);
+    }
   }
 
+  // Check known beacons that are absent from this scan
   for (const [name, known] of knownSubscriptions) {
-    if (!currentBeacons.has(name)) {
-      diff.removed.push(known);
+    if (currentBeacons.has(name)) continue;
+
+    const pending = pendingRemovals.get(name);
+
+    if (!pending) {
+      // Not yet pending — only start tracking during verification passes
+      if (isVerifyTime) {
+        console.log(`[SCANNER] Beacon ${name.slice(0, 16)}… absent during verification — starting confirmation (1/${CONFIRM_COUNT})`);
+        pendingRemovals.set(name, { firstMissAt: now, lastCheckAt: now, missCount: 1 });
+      }
+      // Between verifications: ignore the absence
+    } else if (now - pending.lastCheckAt >= CONFIRM_INTERVAL_MS) {
+      // Already pending — enough time for the next confirmation check
+      pending.missCount++;
+      pending.lastCheckAt = now;
+
+      if (pending.missCount >= CONFIRM_COUNT) {
+        console.log(`[SCANNER] Beacon ${name.slice(0, 16)}… confirmed removed after ${pending.missCount} checks`);
+        diff.removed.push(known);
+        pendingRemovals.delete(name);
+      } else {
+        console.log(`[SCANNER] Beacon ${name.slice(0, 16)}… still absent (${pending.missCount}/${CONFIRM_COUNT})`);
+      }
     }
+    // else: pending but too soon for next confirmation — wait
+  }
+
+  if (isVerifyTime) {
+    lastVerifyAt = now;
   }
 
   // ── Persist new state ────────────────────────────────────────────────────
-  knownSubscriptions.clear();
+  // Start with beacons found on chain
+  const newKnown = new Map<string, TrackedSubscription>();
   for (const [name, sub] of currentBeacons) {
+    newKnown.set(name, sub);
+  }
+  // Preserve beacons that are pending removal (absent but unconfirmed)
+  for (const [name] of pendingRemovals) {
+    if (!newKnown.has(name)) {
+      const old = knownSubscriptions.get(name);
+      if (old) newKnown.set(name, old);
+    }
+  }
+
+  knownSubscriptions.clear();
+  for (const [name, sub] of newKnown) {
     knownSubscriptions.set(name, sub);
   }
 
@@ -278,6 +359,7 @@ export function getKnownSubscriptions(): Map<string, TrackedSubscription> {
 //     paymentAsset   : Constr 0 [ policyId: Bytes, assetName: Bytes ]
 //     beaconId       : Bytes        → { bytes: hex }
 //     userEncrypted  : Bytes        → { bytes: hex }
+//     creationHeight : Int          → { int: N }
 //   ]
 //
 // If Blockfrost returns inline_datum as null (datum is referenced by hash, not
@@ -292,12 +374,13 @@ function parseDatumFromUtxo(utxo: BlockfrostUtxo): SubscriptionDatum | null {
     if (!isConstr(raw) || raw.constructor !== 0) return null;
 
     const f = raw.fields;
-    // Expect at least 10 fields (updated datum with interval-based collection)
-    if (!f || f.length < 10) return null;
+    // Expect at least 11 fields (10 original + creation_height)
+    if (!f || f.length < 11) return null;
 
-    const [f0, f1, f2, f3, f4, f5, f6, f7, f8, f9] = f as [
+    const [f0, f1, f2, f3, f4, f5, f6, f7, f8, f9, f10] = f as [
       PlutusValue, PlutusValue, PlutusValue, PlutusValue, PlutusValue,
       PlutusValue, PlutusValue, PlutusValue, PlutusValue, PlutusValue,
+      PlutusValue,
     ];
 
     const planId = intField(f0);
@@ -333,6 +416,9 @@ function parseDatumFromUtxo(utxo: BlockfrostUtxo): SubscriptionDatum | null {
     const userEncrypted = bytesField(f9);
     if (userEncrypted === null) return null;
 
+    const creationHeight = bigIntField(f10);
+    if (creationHeight === null) return null;
+
     return {
       planId: Number(planId),
       expiry,
@@ -344,6 +430,7 @@ function parseDatumFromUtxo(utxo: BlockfrostUtxo): SubscriptionDatum | null {
       paymentAsset: { policyId, assetName },
       beaconId,
       userEncrypted,
+      creationHeight,
     };
   } catch {
     return null;

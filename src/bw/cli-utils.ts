@@ -6,9 +6,8 @@
 
 import * as fs from "fs";
 import * as yaml from "js-yaml";
-import type { BlockFrostAPI } from "../cardano/provider.js";
-import { getBlockfrost } from "../cardano/provider.js";
-import { isValidAddress } from "cmttk";
+import { isValidAddress, getProvider } from "cmttk";
+import type { CardanoProvider } from "cmttk";
 import type { AssetId } from "../cardano/types.js";
 import { loadNetworkConfig } from "../fund-manager/web3-config.js";
 import type { Addressbook, AddressbookEntry } from "../fund-manager/types.js";
@@ -131,15 +130,14 @@ function resolveStableToken(): AssetId {
  *
  * Throws if the role has no keyfile or if the mnemonic is invalid.
  */
-// ── Blockfrost client ─────────────────────────────────────────────────────────
+// ── Provider client ──────────────────────────────────────────────────────────
 
 /**
- * Convenience wrapper: read Blockfrost credentials from web3-defaults.yaml
- * and return a configured BlockFrostAPI client.
+ * Get a CardanoProvider configured from web3-defaults.yaml.
  */
-export function getBlockfrostClient(): BlockFrostAPI {
+export function getProviderClient(): CardanoProvider {
   const { blockfrostProjectId, network } = loadNetworkConfig();
-  return getBlockfrost(blockfrostProjectId, network);
+  return getProvider(network, blockfrostProjectId || undefined);
 }
 
 // ── Formatting helpers ────────────────────────────────────────────────────────

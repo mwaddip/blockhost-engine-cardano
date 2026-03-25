@@ -32,6 +32,8 @@ pub type SubscriptionDatum {
   beacon_policy_id: ByteArray,
   /// ECIES-encrypted connection details (for the server to decrypt)
   user_encrypted: ByteArray,
+  /// Block height at subscription creation (beacon uniqueness salt)
+  creation_height: Int,
 }
 
 /// Plan reference datum — stored in a reference UTXO readable by anyone

@@ -19,6 +19,7 @@ export interface SubscriptionDatum {
   paymentAsset: AssetId;     // policy + name
   beaconId: string;          // beacon minting policy hash (hex)
   userEncrypted: string;     // hex-encoded encrypted data
+  creationHeight: bigint;    // block height at subscription creation (beacon uniqueness salt)
 }
 
 /** Cardano native asset identifier */

@@ -19,7 +19,7 @@
 
 import { hmac } from "@noble/hashes/hmac";
 import { sha256 } from "@noble/hashes/sha2";
-import type { BlockFrostAPI } from "../cardano/provider.js";
+import type { CardanoProvider } from "cmttk";
 import type {
   AdminCommand,
   AdminConfig,
@@ -140,15 +140,40 @@ export async function dispatchCommand(
   return handler(cmdDef.params, cmdDef.params, txHash);
 }
 
-// ── Blockfrost metadata shape ─────────────────────────────────────────────────
+// ── Metadata normalization ────────────────────────────────────────────────────
 
-interface BlockfrostTxMeta {
+interface TxMetaEntry {
   label: string;
   json_metadata: unknown;
 }
 
-interface BlockfrostAddrTx {
-  tx_hash: string;
+/**
+ * Normalize provider metadata response to a flat array of { label, json_metadata }.
+ *
+ * Blockfrost returns: [{ label: "7368", json_metadata: {...} }]
+ * Koios returns:      [{ tx_hash: "...", metadata: { "7368": {...} } }]
+ */
+function normalizeMetadata(raw: unknown[]): TxMetaEntry[] {
+  if (raw.length === 0) return [];
+
+  const first = raw[0] as Record<string, unknown>;
+
+  // Blockfrost format
+  if ("label" in first && "json_metadata" in first) {
+    return raw as TxMetaEntry[];
+  }
+
+  // Koios format
+  if ("metadata" in first) {
+    const metadata = first["metadata"] as Record<string, unknown> | null;
+    if (!metadata) return [];
+    return Object.entries(metadata).map(([label, value]) => ({
+      label,
+      json_metadata: value,
+    }));
+  }
+
+  return [];
 }
 
 // ── Block Processing ──────────────────────────────────────────────────────────
@@ -165,7 +190,7 @@ interface BlockfrostAddrTx {
  * already executed will be rejected on replay.
  */
 export async function processAdminCommands(
-  client: BlockFrostAPI,
+  provider: CardanoProvider,
   adminConfig: AdminConfig,
 ): Promise<void> {
   const commandDb = loadCommandDatabase();
@@ -173,25 +198,21 @@ export async function processAdminCommands(
 
   pruneOldNonces(adminConfig.max_command_age);
 
-  let recentTxs: BlockfrostAddrTx[];
+  let recentTxs: Array<{ tx_hash: string }>;
   try {
-    const raw = await client.addressesTransactions(adminConfig.wallet_address, {
+    const raw = await provider.fetchAddressTransactions(adminConfig.wallet_address, {
       count: 20,
       order: "desc",
     });
-    recentTxs = raw as BlockfrostAddrTx[];
-  } catch (err: unknown) {
-    if (isBlockfrost404(err)) {
-      // Admin address has no transactions yet — nothing to do
-      return;
-    }
+    recentTxs = raw as Array<{ tx_hash: string }>;
+  } catch (err) {
     console.error(`[ADMIN] Error querying admin address transactions: ${err}`);
     return;
   }
 
   for (const tx of recentTxs) {
     try {
-      await processTransaction(client, tx.tx_hash, adminConfig, commandDb);
+      await processTransaction(provider, tx.tx_hash, adminConfig, commandDb);
     } catch (err) {
       console.error(`[ADMIN] Error processing tx ${tx.tx_hash}: ${err}`);
     }
@@ -202,18 +223,18 @@ export async function processAdminCommands(
  * Process a single transaction for potential admin metadata commands.
  */
 async function processTransaction(
-  client: BlockFrostAPI,
+  provider: CardanoProvider,
   txHash: string,
   adminConfig: AdminConfig,
   commandDb: CommandDatabase,
 ): Promise<void> {
-  let metaList: BlockfrostTxMeta[];
+  let metaList: TxMetaEntry[];
   try {
-    const raw = await client.txsMetadata(txHash);
-    metaList = raw as BlockfrostTxMeta[];
-  } catch (err: unknown) {
-    if (isBlockfrost404(err)) return; // No metadata
-    throw err;
+    const raw = await provider.fetchTxMetadata(txHash);
+    metaList = normalizeMetadata(raw);
+  } catch (err) {
+    console.error(`[ADMIN] Error fetching metadata for tx ${txHash}: ${err}`);
+    return;
   }
 
   for (const entry of metaList) {
@@ -271,17 +292,6 @@ export function initAdminCommands(): void {
 export async function shutdownAdminCommands(): Promise<void> {
   await closeAllKnocks();
   console.log(`[ADMIN] Admin command system shutdown`);
-}
-
-// ── Utility ───────────────────────────────────────────────────────────────────
-
-function isBlockfrost404(err: unknown): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    "status_code" in err &&
-    (err as { status_code: number }).status_code === 404
-  );
 }
 
 // Re-export only what external consumers need

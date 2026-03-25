@@ -14,7 +14,7 @@
 import * as fs from "fs";
 import * as yaml from "js-yaml";
 import { findNftHolder } from "../../nft/reference.js";
-import { getBlockfrostClient } from "../cli-utils.js";
+import { getProviderClient } from "../cli-utils.js";
 import { loadWeb3Config } from "../../fund-manager/web3-config.js";
 
 const CONFIG_DIR = process.env["BLOCKHOST_CONFIG_DIR"] ?? "/etc/blockhost";
@@ -79,9 +79,9 @@ export async function whoCommand(args: string[]): Promise<void> {
   }
 
   const cfg = loadWeb3Config();
-  const client = getBlockfrostClient();
+  const provider = getProviderClient();
 
-  const holder = await findNftHolder(client, cfg.nftPolicyId, tokenId);
+  const holder = await findNftHolder(provider, cfg.nftPolicyId, tokenId);
 
   if (!holder) {
     console.error(`Error: token ${tokenId} does not exist or has no holder`);

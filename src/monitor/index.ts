@@ -1,16 +1,16 @@
 /**
  * BlockHost Cardano monitor — main polling loop.
  *
- * Polls Blockfrost every 30 seconds for beacon token UTXOs at the subscription
- * validator address.  Detects new subscriptions, extensions, and removals by
- * diffing the current chain state against our known state.  Handler dispatch
- * is stubbed (Task 4).  Runs periodic reconciliation and fund cycles.
- * Handles graceful shutdown on SIGINT/SIGTERM.
+ * Polls Koios every 30 seconds for beacon token UTXOs.  Detects new
+ * subscriptions, extensions, and removals by diffing the current chain
+ * state against our known state.  Runs periodic reconciliation, fund
+ * cycles, and collateral checks.  Handles graceful shutdown on
+ * SIGINT/SIGTERM.
  */
 
-import { BlockFrostAPI } from "../cardano/provider.js";
+import { getProvider } from "cmttk";
+import type { CardanoProvider } from "cmttk";
 import { loadWeb3Config } from "../fund-manager/web3-config.js";
-import { getBlockfrost } from "../cardano/provider.js";
 import { scanBeacons, type ScanDiff } from "./scanner.js";
 import {
   handleSubscriptionCreated,
@@ -18,7 +18,13 @@ import {
   handleSubscriptionRemoved,
 } from "../handlers/index.js";
 import { runReconciliation as reconcileNftOwnership } from "../reconcile/index.js";
-import { runFundManager, shouldRunFundCycle, isProvisioningInProgress } from "../fund-manager/index.js";
+import {
+  runFundManager,
+  shouldRunFundCycle,
+  shouldRunCollateralCheck,
+  runCollateralCheck,
+  isProvisioningInProgress,
+} from "../fund-manager/index.js";
 import {
   processAdminCommands,
   initAdminCommands,
@@ -46,10 +52,10 @@ let lastReconcile = 0;
 // ── Periodic tasks ────────────────────────────────────────────────────────────
 
 async function runReconciliation(
-  client: BlockFrostAPI,
+  provider: CardanoProvider,
   nftPolicyId: string,
 ): Promise<void> {
-  await reconcileNftOwnership(client, nftPolicyId);
+  await reconcileNftOwnership(provider, nftPolicyId);
 }
 
 async function runFundCycle(): Promise<void> {
@@ -64,8 +70,7 @@ async function runFundCycle(): Promise<void> {
 // ── Core poll loop ────────────────────────────────────────────────────────────
 
 async function poll(
-  client: BlockFrostAPI,
-  validatorAddress: string,
+  provider: CardanoProvider,
   beaconPolicyId: string,
   nftPolicyId: string,
   network: string,
@@ -73,7 +78,7 @@ async function poll(
 ): Promise<void> {
   while (running) {
     try {
-      const diff: ScanDiff = await scanBeacons(client, validatorAddress, beaconPolicyId, network);
+      const diff: ScanDiff = await scanBeacons(beaconPolicyId, network);
 
       // Process new subscriptions
       for (const sub of diff.created) {
@@ -105,7 +110,7 @@ async function poll(
       // Scan admin wallet transactions for metadata commands (label 7368)
       if (adminConfig) {
         try {
-          await processAdminCommands(client, adminConfig);
+          await processAdminCommands(provider, adminConfig);
         } catch (err) {
           console.error(`[MONITOR] Admin command scan error: ${err}`);
         }
@@ -117,7 +122,7 @@ async function poll(
       if (now - lastReconcile >= RECONCILE_INTERVAL_MS) {
         console.log("[MONITOR] Running reconciliation...");
         try {
-          await runReconciliation(client, nftPolicyId);
+          await runReconciliation(provider, nftPolicyId);
         } catch (err) {
           console.error(`[MONITOR] Reconciliation error: ${err}`);
         }
@@ -129,6 +134,15 @@ async function poll(
         await runFundCycle();
       } catch (err) {
         console.error(`[MONITOR] Fund cycle error: ${err}`);
+      }
+
+      // Periodic collateral check (hourly)
+      try {
+        if (shouldRunCollateralCheck()) {
+          await runCollateralCheck();
+        }
+      } catch (err) {
+        console.error(`[MONITOR] Collateral check error: ${err}`);
       }
     } catch (err) {
       console.error(`[MONITOR] Poll error: ${err}`);
@@ -178,7 +192,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const client = getBlockfrost(config.blockfrostProjectId, config.network);
+  const provider = getProvider(config.network, config.blockfrostProjectId || undefined);
 
   // Load admin config (optional — null means admin commands are disabled)
   const adminConfig = loadAdminConfig();
@@ -198,6 +212,7 @@ async function main(): Promise<void> {
   });
 
   console.log(`Network:          ${config.network}`);
+  console.log(`Provider:         ${provider.name}`);
   console.log(`Validator:        ${config.subscriptionValidatorAddress}`);
   console.log(`Beacon policy:    ${config.beaconPolicyId}`);
   console.log(`Poll interval:    ${POLL_INTERVAL_MS / 1000}s`);
@@ -209,8 +224,7 @@ async function main(): Promise<void> {
 
   console.log("Monitor is running. Press Ctrl+C to stop.\n");
   await poll(
-    client,
-    config.subscriptionValidatorAddress,
+    provider,
     config.beaconPolicyId,
     config.nftPolicyId,
     config.network,

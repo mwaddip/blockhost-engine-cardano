@@ -1,9 +1,11 @@
 /**
  * Fund Manager Module (Cardano)
  *
- * Periodic task integrated into the monitor polling loop:
+ * Periodic tasks integrated into the monitor polling loop:
  *   - Fund cycle (every 24h): batch-collect mature subscription UTXOs,
  *     then distribute collected ADA to hot/server/dev/broker/admin.
+ *   - Collateral check (every 1h): ensure the deployer wallet has a
+ *     clean ADA-only UTxO for Plutus script execution.
  *
  * No gas check cycle — Cardano has deterministic fees so there is no
  * gas market volatility to monitor.
@@ -12,13 +14,13 @@
  */
 
 import { spawnSync } from "child_process";
-import { getBlockfrost } from "../cardano/provider.js";
 import { getCommand } from "../provisioner.js";
 import { loadFundManagerConfig, loadRevenueShareConfig } from "./config.js";
 import { loadState, updateState } from "./state.js";
 import { loadWeb3Config } from "./web3-config.js";
 import { loadAddressbook, ensureHotWallet } from "./addressbook.js";
 import { runFundCycle as collectSubscriptions } from "./withdrawal.js";
+import { ensureCollateral } from "./collateral.js";
 import {
   topUpHotWalletGas,
   topUpServerStablecoinBuffer,
@@ -52,6 +54,17 @@ export function shouldRunFundCycle(): boolean {
 }
 
 /**
+ * Check if the collateral check is due.
+ *
+ * Testing mode: every 1 minute.  Production: every 1 hour.
+ */
+export function shouldRunCollateralCheck(): boolean {
+  const state = loadState();
+  const interval = testingMode ? 60_000 : 3_600_000;
+  return Date.now() - state.last_collateral_check >= interval;
+}
+
+/**
  * Return true if a provisioner VM-create command is currently running.
  * We skip fund cycles during provisioning to avoid ADA balance race conditions.
  */
@@ -63,6 +76,26 @@ export function isProvisioningInProgress(): boolean {
   } catch {
     // getCommand() may throw if manifest not loaded — treat as not in progress
     return false;
+  }
+}
+
+// ── Collateral check ────────────────────────────────────────────────────────
+
+/**
+ * Run the periodic collateral check.
+ *
+ * Ensures the deployer wallet has a clean ADA-only UTxO for Plutus
+ * collateral.  Creates one if missing.
+ */
+export async function runCollateralCheck(): Promise<void> {
+  try {
+    const book = loadAddressbook();
+    if (!book["server"]?.keyfile) return;
+    await ensureCollateral(book);
+  } catch (err) {
+    console.error(`[FUND] Collateral check error: ${err}`);
+  } finally {
+    updateState({ last_collateral_check: Date.now() });
   }
 }
 
@@ -88,10 +121,6 @@ export async function runFundManager(): Promise<void> {
     }
 
     const web3Config = loadWeb3Config();
-    const client = getBlockfrost(
-      web3Config.blockfrostProjectId,
-      web3Config.network,
-    );
 
     console.log("[FUND] Starting fund cycle...");
 
@@ -110,7 +139,6 @@ export async function runFundManager(): Promise<void> {
       await collectSubscriptions(
         book,
         config,
-        client,
         web3Config.subscriptionValidatorAddress,
         web3Config.beaconPolicyId,
       );

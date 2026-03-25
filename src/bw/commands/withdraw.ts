@@ -42,7 +42,7 @@ const MAX_BATCH = 15; // max UTXOs per transaction to stay within limits
 function decodeSubscriptionDatum(cborHex: string): SubscriptionDatum | null {
   try {
     const d = Data.from(cborHex);
-    if (!(d instanceof Constr) || d.index !== 0 || d.fields.length < 10) {
+    if (!(d instanceof Constr) || d.index !== 0 || d.fields.length < 11) {
       return null;
     }
     const f = d.fields;
@@ -61,6 +61,7 @@ function decodeSubscriptionDatum(cborHex: string): SubscriptionDatum | null {
       },
       beaconId: f[8] as string,
       userEncrypted: f[9] as string,
+      creationHeight: f[10] as bigint,
     };
   } catch {
     return null;
