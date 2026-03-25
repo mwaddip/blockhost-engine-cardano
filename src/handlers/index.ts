@@ -315,11 +315,26 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
 
   console.log(`[INFO] VM summary: ip=${summary.ip}, vmid=${summary.vmid}`);
 
+  // Read IPv6 from vms.json (provisioner writes it there, not always in stdout)
+  let vmIpv6 = summary.ipv6 ?? "";
+  if (!vmIpv6) {
+    try {
+      const fs = await import("fs");
+      const dbPath = process.env["BLOCKHOST_STATE_DIR"]
+        ? `${process.env["BLOCKHOST_STATE_DIR"]}/vms.json`
+        : "/var/lib/blockhost/vms.json";
+      if (fs.existsSync(dbPath)) {
+        const db = JSON.parse(fs.readFileSync(dbPath, "utf8"));
+        vmIpv6 = db.vms?.[vmName]?.ipv6_address ?? "";
+      }
+    } catch { /* non-fatal */ }
+  }
+
   // Step 4: Encrypt connection details with user signature
   let userEncryptedOut = "";
 
   if (userSignature) {
-    const hostname = summary.ipv6 ?? summary.ip;
+    const hostname = vmIpv6 || summary.ip;
     const encrypted = encryptConnectionDetails(userSignature, hostname, summary.username);
     if (encrypted) {
       userEncryptedOut = encrypted;
