@@ -59,6 +59,41 @@ type PlutusValue =
 /** Map of beacon name → subscription, representing the last-known chain state */
 const knownSubscriptions = new Map<string, TrackedSubscription>();
 
+/** Load known beacon names from vms.json on startup to prevent re-provisioning */
+let _stateLoaded = false;
+function loadKnownBeacons(): void {
+  if (_stateLoaded) return;
+  _stateLoaded = true;
+  try {
+    const dbPath = process.env["BLOCKHOST_STATE_DIR"]
+      ? `${process.env["BLOCKHOST_STATE_DIR"]}/vms.json`
+      : "/var/lib/blockhost/vms.json";
+    const fs = require("fs") as typeof import("fs");
+    if (!fs.existsSync(dbPath)) return;
+    const db = JSON.parse(fs.readFileSync(dbPath, "utf8"));
+    const vms = db.vms ?? {};
+    for (const [, vm] of Object.entries(vms)) {
+      const entry = vm as Record<string, unknown>;
+      const beaconName = entry["beacon_name"] as string | undefined;
+      if (beaconName) {
+        // Insert a placeholder to mark this beacon as already processed
+        knownSubscriptions.set(beaconName, {
+          utxoRef: entry["utxo_ref"] as string ?? "restored",
+          beaconName,
+          datum: {} as any,
+          utxo: null,
+          firstSeen: 0,
+        });
+      }
+    }
+    if (knownSubscriptions.size > 0) {
+      console.log(`[SCANNER] Restored ${knownSubscriptions.size} known beacon(s) from vms.json`);
+    }
+  } catch {
+    // vms.json not readable — start fresh
+  }
+}
+
 // ── Blockfrost UTXO shape (partial — only fields we use) ─────────────────────
 
 interface BlockfrostUtxo {
@@ -83,6 +118,9 @@ export async function scanBeacons(
   beaconPolicyId: string,
   network: string = "preprod",
 ): Promise<ScanDiff> {
+  // Restore known beacons from vms.json on first run
+  loadKnownBeacons();
+
   // ── Fetch current UTXOs by scanning for beacon tokens ──────────────────
   // Subscriptions live at CIP-89 addresses (per-subscriber), so we can't
   // query a single address. Instead, find all addresses holding beacon tokens

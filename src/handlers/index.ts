@@ -286,6 +286,24 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
 
   console.log(`[OK] VM ${vmName} provisioned successfully`);
 
+  // Save beacon name to vms.json so the scanner can skip it on restart
+  try {
+    const fs = await import("fs");
+    const dbPath = process.env["BLOCKHOST_STATE_DIR"]
+      ? `${process.env["BLOCKHOST_STATE_DIR"]}/vms.json`
+      : "/var/lib/blockhost/vms.json";
+    if (fs.existsSync(dbPath)) {
+      const db = JSON.parse(fs.readFileSync(dbPath, "utf8"));
+      if (db.vms?.[vmName]) {
+        db.vms[vmName].beacon_name = beaconName;
+        db.vms[vmName].utxo_ref = utxoRef;
+        fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
+      }
+    }
+  } catch {
+    // Non-fatal — scanner will re-detect but provisioner will skip existing VM
+  }
+
   // Step 3: Parse JSON summary from provisioner stdout
   const summary = parseVmSummary(createResult.stdout);
   if (!summary) {
