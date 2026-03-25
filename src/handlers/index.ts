@@ -189,17 +189,17 @@ function parseMintOutput(stdout: string): number | null {
 /**
  * Mark an NFT as minted in the VM database (synchronous Python subprocess).
  */
-function markNftMinted(nftTokenId: number, ownerWallet: string): void {
+function markNftMinted(vmName: string, nftTokenId: number): void {
   const script = `
 import os
 from blockhost.vm_db import get_database
 db = get_database()
-db.set_nft_minted(int(os.environ['NFT_TOKEN_ID']), os.environ['OWNER_WALLET'])
+db.set_nft_minted(os.environ['VM_NAME'], int(os.environ['NFT_TOKEN_ID']))
 `;
   const result = spawnSync("python3", ["-c", script], {
     cwd: WORKING_DIR,
     timeout: 10_000,
-    env: { ...process.env, NFT_TOKEN_ID: String(nftTokenId), OWNER_WALLET: ownerWallet },
+    env: { ...process.env, VM_NAME: vmName, NFT_TOKEN_ID: String(nftTokenId) },
   });
   if (result.status !== 0) {
     const errMsg = result.stderr ? result.stderr.toString().trim() : "";
@@ -413,7 +413,7 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
   void gecosUpdated;
 
   // Step 8: Mark NFT minted in database
-  markNftMinted(actualTokenId, datum.subscriber);
+  markNftMinted(vmName, actualTokenId);
 
   console.log("==========================================\n");
 }
