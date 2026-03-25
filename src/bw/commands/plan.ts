@@ -54,7 +54,18 @@ function encodePlanDatum(
 
 // ── Auto-increment plan ID ───────────────────────────────────────────────────
 
-let nextPlanId = 1;
+function getNextPlanId(): number {
+  const STATE_DIR = process.env["BLOCKHOST_STATE_DIR"] ?? "/var/lib/blockhost";
+  const counterPath = `${STATE_DIR}/next-plan-id`;
+  let current = 1;
+  try {
+    const raw = fs.readFileSync(counterPath, "utf8").trim();
+    const parsed = parseInt(raw, 10);
+    if (!isNaN(parsed) && parsed > 0) current = parsed;
+  } catch { /* file doesn't exist — start at 1 */ }
+  fs.writeFileSync(counterPath, String(current + 1), "utf8");
+  return current;
+}
 
 // ── CLI handler ──────────────────────────────────────────────────────────────
 
@@ -144,8 +155,8 @@ async function planCreateCommand(
   const wallet = await deriveWallet(mnemonic, network);
   const provider = getProvider(network, blockfrostProjectId);
 
-  // Auto-increment plan ID
-  const planId = nextPlanId++;
+  // Persistent auto-increment plan ID
+  const planId = getNextPlanId();
 
   // Encode the datum
   const datumCbor = encodePlanDatum(planId, name, pricePerDay, acceptedAssets, true);
