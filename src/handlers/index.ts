@@ -388,16 +388,29 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
   console.log(`[OK] NFT minted for ${vmName} (token #${actualTokenId})`);
 
   // Step 7: Update GECOS with actual token ID
+  // Wait for the guest agent to start — the VM was just created and may
+  // still be booting.  Retry a few times with delays.
   const gecosCmd = getCommand("update-gecos");
   const gecosArgs = [vmName, datum.subscriber, "--nft-id", String(actualTokenId)];
-  const gecosResult = spawnSync(gecosCmd, gecosArgs, { timeout: 30_000, cwd: WORKING_DIR });
-  if (gecosResult.status !== 0) {
-    const errMsg = gecosResult.stderr ? gecosResult.stderr.toString().trim() : "";
-    console.error(`[WARN] update-gecos failed for ${vmName}${errMsg ? ": " + errMsg : ""}`);
-    // Not fatal — reconciler will retry
-  } else {
-    console.log(`[OK] GECOS updated for ${vmName}`);
+  let gecosUpdated = false;
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    if (attempt > 1) {
+      console.log(`[INFO] Waiting for guest agent (attempt ${attempt}/4)...`);
+      spawnSync("sleep", ["15"]);
+    }
+    const gecosResult = spawnSync(gecosCmd, gecosArgs, { timeout: 30_000, cwd: WORKING_DIR });
+    if (gecosResult.status === 0) {
+      console.log(`[OK] GECOS updated for ${vmName}`);
+      gecosUpdated = true;
+      break;
+    }
+    if (attempt === 4) {
+      const errMsg = gecosResult.stderr ? gecosResult.stderr.toString().trim() : "";
+      console.error(`[WARN] update-gecos failed for ${vmName} after ${attempt} attempts${errMsg ? ": " + errMsg : ""}`);
+    }
   }
+  // Not fatal if GECOS failed — reconciler will retry on next cycle
+  void gecosUpdated;
 
   // Step 8: Mark NFT minted in database
   markNftMinted(actualTokenId, datum.subscriber);
