@@ -125,7 +125,7 @@
                             Fund this wallet with ADA to continue. At least <strong>30 ADA</strong> recommended (validator deployment requires ~20 ADA for reference script UTXOs).
                         </p>
                         <div style="display: flex; gap: 0.5rem; align-items: center;">
-                            <input type="number" id="topup-amount" step="1" min="2" value="10" style="width: 6rem;">
+                            <input type="number" id="topup-amount" step="1" min="2" value="30" style="width: 6rem;">
                             <span style="font-size: 0.875rem;">ADA</span>
                             <button type="button" class="btn btn-small btn-primary"
                                     onclick="topUpWallet('generate')" id="topup-btn">
@@ -169,7 +169,7 @@
                         Fund this wallet with ADA to continue. At least <strong>30 ADA</strong> recommended (validator deployment requires ~20 ADA for reference script UTXOs).
                     </p>
                     <div style="display: flex; gap: 0.5rem; align-items: center;">
-                        <input type="number" id="import-topup-amount" step="1" min="2" value="10" style="width: 6rem;">
+                        <input type="number" id="import-topup-amount" step="1" min="2" value="30" style="width: 6rem;">
                         <span style="font-size: 0.875rem;">ADA</span>
                         <button type="button" class="btn btn-small btn-primary"
                                 onclick="topUpWallet('import')" id="import-topup-btn">
@@ -355,8 +355,10 @@ function selectRadio(element) {
             document.getElementById('deployer-mnemonic-hidden').value = '';
             document.getElementById('deployer-address-hidden').value = '';
         }
+        updateContinueButton();
     } else if (radio.name === 'contract_mode') {
         document.getElementById('contracts-existing').classList.toggle('hidden', radio.value !== 'existing');
+        updateContinueButton();
     }
 }
 
@@ -387,6 +389,7 @@ function generateWallet() {
         document.getElementById('wallet-generated').classList.remove('hidden');
         btn.textContent = 'Regenerate';
         setTimeout(function() { checkBalance('generate'); }, 500);
+        startAutoRefresh('generate');
     })
     .catch(function(err) {
         btn.disabled = false;
@@ -454,6 +457,7 @@ function validateImportMnemonic() {
             document.getElementById('import-deployer-address').textContent = data.address;
             document.getElementById('import-funding').classList.remove('hidden');
             setTimeout(function() { checkBalance('import'); }, 500);
+            startAutoRefresh('import');
         } else {
             statusDiv.innerHTML = '<div class="status-indicator error">Invalid: ' + data.error + '</div>';
         }
@@ -513,8 +517,31 @@ document.getElementById('blockchain-form').addEventListener('submit', function(e
 
 });
 
-// ---- Koios URL helper ----
 // ---- Balance check via backend proxy (avoids CORS) ----
+
+var _autoRefreshTimer = null;
+var _lastBalanceLovelace = { generate: 0, import: 0 };
+
+function getMinBalance() {
+    var contractMode = document.querySelector('input[name="contract_mode"]:checked');
+    // Existing validators don't need reference script deployment funds
+    return (contractMode && contractMode.value === 'existing') ? 15000000 : 30000000;
+}
+
+function updateContinueButton() {
+    var walletMode = document.querySelector('input[name="wallet_mode"]:checked');
+    var mode = walletMode ? walletMode.value : 'generate';
+    var btn = document.getElementById('continue-btn');
+    var bal = _lastBalanceLovelace[mode] || 0;
+    if (bal >= getMinBalance()) {
+        btn.disabled = false;
+        btn.title = '';
+    } else {
+        btn.disabled = true;
+        btn.title = 'Fund the deployer wallet with at least 30 ADA to continue (15 ADA when using existing validators)';
+    }
+}
+
 function checkBalance(mode) {
     var addr = mode === 'generate'
         ? document.getElementById('deployer-address').textContent.trim()
@@ -530,15 +557,33 @@ function checkBalance(mode) {
     })
     .then(function(r) { return r.json(); })
     .then(function(data) {
+        var lovelace = 0;
         if (data && data.balance) {
-            var ada = (parseInt(data.balance) / 1000000).toFixed(2);
+            lovelace = parseInt(data.balance);
+            var ada = (lovelace / 1000000).toFixed(2);
             balanceEl.textContent = ada + ' ADA';
         } else {
             balanceEl.textContent = '0 ADA';
         }
+        _lastBalanceLovelace[mode] = lovelace;
+        updateContinueButton();
+
+        // Stop auto-refresh once balance meets threshold
+        if (lovelace >= getMinBalance() && _autoRefreshTimer) {
+            clearInterval(_autoRefreshTimer);
+            _autoRefreshTimer = null;
+        }
     })
     .catch(function() { balanceEl.textContent = 'Error'; });
 }
+
+function startAutoRefresh(mode) {
+    if (_autoRefreshTimer) clearInterval(_autoRefreshTimer);
+    _autoRefreshTimer = setInterval(function() { checkBalance(mode); }, 3000);
+}
+
+// Disable Continue on page load until balance is confirmed
+document.getElementById('continue-btn').disabled = true;
 
 // ---- Hex / bytes helpers ----
 function hexToBytes(hex) {

@@ -1234,7 +1234,13 @@ def finalize_revenue_share(config: dict) -> tuple[bool, Optional[str]]:
         rev_path.write_text(json.dumps(rev_config, indent=2) + "\n")
         _set_blockhost_ownership(rev_path, 0o640)
 
-        # Enable blockhost-monitor service
+        # Install and enable blockhost-monitor service
+        svc_src = Path("/usr/share/blockhost/examples/blockhost-monitor.service")
+        svc_dst = Path("/etc/systemd/system/blockhost-monitor.service")
+        if svc_src.exists() and not svc_dst.exists():
+            import shutil
+            shutil.copy2(str(svc_src), str(svc_dst))
+            subprocess.run(["systemctl", "daemon-reload"], capture_output=True, timeout=30)
         subprocess.run(
             ["systemctl", "enable", "blockhost-monitor"],
             capture_output=True,
