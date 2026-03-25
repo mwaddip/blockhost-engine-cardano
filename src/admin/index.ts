@@ -201,7 +201,7 @@ export async function processAdminCommands(
   let recentTxs: Array<{ tx_hash: string }>;
   try {
     const raw = await provider.fetchAddressTransactions(adminConfig.wallet_address, {
-      count: 20,
+      count: 5,
       order: "desc",
     });
     recentTxs = raw as Array<{ tx_hash: string }>;

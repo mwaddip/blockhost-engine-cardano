@@ -41,13 +41,15 @@ const testingMode = fs.existsSync(TESTING_MODE_FILE);
 
 // ── Intervals ─────────────────────────────────────────────────────────────────
 
-const POLL_INTERVAL_MS = testingMode ? 5_000 : 30_000;               // 5s test / 30s prod
-const RECONCILE_INTERVAL_MS = testingMode ? 60_000 : 3_600_000;      // 1min test / 1hr prod
+const POLL_INTERVAL_MS = testingMode ? 30_000 : 60_000;               // 30s test / 60s prod
+const RECONCILE_INTERVAL_MS = testingMode ? 120_000 : 3_600_000;     // 2min test / 1hr prod
+const ADMIN_SCAN_INTERVAL_MS = testingMode ? 120_000 : 300_000;      // 2min test / 5min prod
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
 let running = true;
 let lastReconcile = 0;
+let lastAdminScan = 0;
 
 // ── Periodic tasks ────────────────────────────────────────────────────────────
 
@@ -107,16 +109,17 @@ async function poll(
         }
       }
 
+      const now = Date.now();
+
       // Scan admin wallet transactions for metadata commands (label 7368)
-      if (adminConfig) {
+      if (adminConfig && now - lastAdminScan >= ADMIN_SCAN_INTERVAL_MS) {
         try {
           await processAdminCommands(provider, adminConfig);
         } catch (err) {
           console.error(`[MONITOR] Admin command scan error: ${err}`);
         }
+        lastAdminScan = now;
       }
-
-      const now = Date.now();
 
       // Periodic reconciliation (every 1 hour)
       if (now - lastReconcile >= RECONCILE_INTERVAL_MS) {
@@ -178,7 +181,7 @@ async function main(): Promise<void> {
   console.log("  BlockHost Cardano Monitor");
   if (testingMode) {
     console.log("  *** TESTING MODE ACTIVE ***");
-    console.log(`  Poll: ${POLL_INTERVAL_MS / 1000}s | Reconcile: ${RECONCILE_INTERVAL_MS / 1000}s | Fund: 30s`);
+    console.log(`  Poll: ${POLL_INTERVAL_MS / 1000}s | Reconcile: ${RECONCILE_INTERVAL_MS / 1000}s | Admin: ${ADMIN_SCAN_INTERVAL_MS / 1000}s | Fund: 10min`);
   }
   console.log("==============================================");
 
