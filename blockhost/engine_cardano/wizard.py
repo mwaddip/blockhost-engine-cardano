@@ -327,6 +327,19 @@ def api_submit():
 
 
 def _koios_url(network: str) -> str:
+    # Check for custom Koios URL from environment or existing config
+    custom = os.environ.get("KOIOS_URL", "")
+    if not custom:
+        cfg_path = CONFIG_DIR / "web3-defaults.yaml"
+        if cfg_path.exists():
+            try:
+                import yaml as _y
+                _raw = _y.safe_load(cfg_path.read_text()) or {}
+                custom = (_raw.get("blockchain") or {}).get("koios_url", "")
+            except Exception:
+                pass
+    if custom:
+        return custom
     if network == "mainnet":
         return "https://api.koios.rest/api/v1"
     if network == "preview":
