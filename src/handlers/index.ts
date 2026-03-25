@@ -359,7 +359,9 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
   );
   const mintArgs: string[] = ["--owner-wallet", subscriberAddress];
   if (userEncryptedOut) {
-    mintArgs.push("--user-encrypted", userEncryptedOut);
+    // Strip 0x prefix if present — mint script expects raw hex
+    const cleanHex = userEncryptedOut.startsWith("0x") ? userEncryptedOut.slice(2) : userEncryptedOut;
+    mintArgs.push("--user-encrypted", cleanHex);
   }
 
   console.log("Minting NFT...");
