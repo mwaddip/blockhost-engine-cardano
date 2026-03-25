@@ -33,8 +33,8 @@ export async function cleanupCommand(
     return;
   }
 
-  const { network, blockfrostProjectId } = loadNetworkConfig();
-  const provider = getProvider(network, blockfrostProjectId);
+  const { network, blockfrostProjectId, koiosUrl } = loadNetworkConfig();
+  const provider = getProvider(network, blockfrostProjectId || undefined, koiosUrl || undefined);
 
   console.error(`Sweeping ADA from ${signingRoles.length} wallet(s) to ${targetAddress}`);
 

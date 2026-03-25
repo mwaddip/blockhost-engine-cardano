@@ -151,9 +151,9 @@ async function planCreateCommand(
 
   const signerEntry = book[signingRole]!;
   const mnemonic = fs.readFileSync(signerEntry.keyfile!, "utf8").trim();
-  const { network, blockfrostProjectId } = loadWeb3Config();
+  const { network, blockfrostProjectId, koiosUrl } = loadWeb3Config();
   const wallet = await deriveWallet(mnemonic, network);
-  const provider = getProvider(network, blockfrostProjectId);
+  const provider = getProvider(network, blockfrostProjectId || undefined, koiosUrl || undefined);
 
   // Persistent auto-increment plan ID
   const planId = getNextPlanId();

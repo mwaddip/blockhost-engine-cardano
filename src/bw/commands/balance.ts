@@ -43,8 +43,8 @@ export async function executeBalance(
   book: Addressbook,
 ): Promise<BalanceResult> {
   const address = resolveAddress(roleOrAddr, book);
-  const { network, blockfrostProjectId } = loadNetworkConfig();
-  const provider = getProvider(network, blockfrostProjectId);
+  const { network, blockfrostProjectId, koiosUrl } = loadNetworkConfig();
+  const provider = getProvider(network, blockfrostProjectId || undefined, koiosUrl || undefined);
 
   // Fetch UTXOs and sum balances
   let amounts: Array<{ unit: string; quantity: string }> = [];

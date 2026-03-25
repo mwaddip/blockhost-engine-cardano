@@ -30,8 +30,8 @@ export async function ensureCollateral(book: Addressbook): Promise<void> {
     return;
   }
 
-  const { network, blockfrostProjectId } = loadNetworkConfig();
-  const provider = getProvider(network, blockfrostProjectId || undefined);
+  const { network, blockfrostProjectId, koiosUrl } = loadNetworkConfig();
+  const provider = getProvider(network, blockfrostProjectId || undefined, koiosUrl || undefined);
 
   const rawUtxos = await provider.fetchUtxos(serverEntry.address);
   const utxos = parseKoiosUtxos(rawUtxos);

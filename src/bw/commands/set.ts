@@ -145,7 +145,7 @@ async function setEncryptCommand(
   const signerEntry = book[signingRole]!;
   const mnemonic = fs.readFileSync(signerEntry.keyfile!, "utf8").trim();
   const wallet = await deriveWallet(mnemonic, web3.network);
-  const provider = getProvider(web3.network, web3.blockfrostProjectId);
+  const provider = getProvider(web3.network, web3.blockfrostProjectId || undefined, web3.koiosUrl || undefined);
 
   const serverKeyHash = getPaymentKeyHash(wallet.address);
   if (!serverKeyHash) throw new Error("Could not extract payment key hash from signer");

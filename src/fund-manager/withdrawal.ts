@@ -59,8 +59,8 @@ export async function runFundCycle(
   }
 
   // Step 1: Identify subscription UTXOs via Koios
-  const { network, blockfrostProjectId } = loadNetworkConfig();
-  const provider = getProvider(network, blockfrostProjectId || undefined);
+  const { network, blockfrostProjectId, koiosUrl } = loadNetworkConfig();
+  const provider = getProvider(network, blockfrostProjectId || undefined, koiosUrl || undefined);
 
   let utxos: Utxo[];
   try {

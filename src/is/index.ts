@@ -56,8 +56,8 @@ async function main(): Promise<void> {
       process.exit(1);
     }
     const address = other[0];
-    const { blockfrostProjectId, network } = loadWeb3Config();
-    const provider = getProvider(network, blockfrostProjectId || undefined);
+    const { blockfrostProjectId, koiosUrl, network } = loadWeb3Config();
+    const provider = getProvider(network, blockfrostProjectId || undefined, koiosUrl || undefined);
     try {
       const utxos = await provider.fetchUtxos(address);
       process.exit(utxos.length > 0 ? 0 : 1);
@@ -89,8 +89,8 @@ async function main(): Promise<void> {
   }
 
   if (walletAddr && nftId) {
-    const { blockfrostProjectId, network, nftPolicyId } = loadWeb3Config();
-    const provider = getProvider(network, blockfrostProjectId || undefined);
+    const { blockfrostProjectId, koiosUrl, network, nftPolicyId } = loadWeb3Config();
+    const provider = getProvider(network, blockfrostProjectId || undefined, koiosUrl || undefined);
 
     try {
       const holder = await findNftHolder(provider, nftPolicyId, parseInt(nftId, 10));

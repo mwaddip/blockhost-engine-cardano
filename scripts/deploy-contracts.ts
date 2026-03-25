@@ -115,7 +115,8 @@ async function main(): Promise<void> {
   }
   const mnemonic = fs.readFileSync(keyPath, "utf8").trim();
   const wallet = await deriveWallet(mnemonic, NETWORK);
-  const provider = getProvider(NETWORK);
+  const koiosUrl = process.env["KOIOS_URL"] ?? "";
+  const provider = getProvider(NETWORK, undefined, koiosUrl || undefined);
 
   const serverKeyHash = getPaymentKeyHash(wallet.address);
   if (!serverKeyHash) {

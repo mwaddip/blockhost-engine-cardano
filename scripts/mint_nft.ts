@@ -49,6 +49,7 @@ interface Args {
 interface Web3Yaml {
   blockchain?: {
     blockfrost_project_id?: string;
+    koios_url?: string;
     network?: string;
     nft_policy_id?: string;
     reference_store_address?: string;
@@ -126,6 +127,7 @@ function loadConfig() {
 
   return {
     blockfrostProjectId: validBf,
+    koiosUrl: bc?.koios_url ?? "",
     network,
     nftPolicyId: bc?.nft_policy_id ?? "",
     referenceStoreAddress: bc?.reference_store_address ?? "",
@@ -211,7 +213,7 @@ async function main(): Promise<void> {
 
   process.stderr.write("Deriving wallet...\n");
   const wallet = await deriveWallet(mnemonic, cfg.network);
-  const provider = getProvider(cfg.network, cfg.blockfrostProjectId);
+  const provider = getProvider(cfg.network, cfg.blockfrostProjectId || undefined, cfg.koiosUrl || undefined);
   const deployerAddress = wallet.address;
   const serverKeyHash = getPaymentKeyHash(deployerAddress);
 

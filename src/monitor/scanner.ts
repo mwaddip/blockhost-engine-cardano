@@ -15,6 +15,7 @@
  *      scans between confirmations), the pending removal is cancelled.
  */
 
+import type { CardanoProvider } from "cmttk";
 import type { SubscriptionDatum } from "../cardano/types.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -150,8 +151,8 @@ interface BlockfrostUtxo {
  * the known state.  Updates the known state in-place before returning.
  */
 export async function scanBeacons(
+  provider: CardanoProvider,
   beaconPolicyId: string,
-  network: string = "preprod",
 ): Promise<ScanDiff> {
   // Restore known beacons from vms.json on first run
   loadKnownBeacons();
@@ -159,59 +160,51 @@ export async function scanBeacons(
   // ── Fetch current UTXOs by scanning for beacon tokens ──────────────────
   // Subscriptions live at CIP-89 addresses (per-subscriber), so we can't
   // query a single address. Instead, find all addresses holding beacon tokens
-  // via Koios, then fetch UTXOs from each.
-  const koiosUrl = network === "mainnet"
-    ? "https://api.koios.rest/api/v1"
-    : network === "preview"
-      ? "https://preview.koios.rest/api/v1"
-      : "https://preprod.koios.rest/api/v1";
+  // via the provider, then fetch UTXOs from each.
 
-  let holders: Array<{ payment_address: string }> = [];
+  let holders: Array<{ address: string; quantity: string }> = [];
   try {
-    const res = await fetch(`${koiosUrl}/policy_asset_addresses`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ _asset_policy: beaconPolicyId }),
-    });
-    if (res.ok) {
-      holders = (await res.json()) as Array<{ payment_address: string }>;
-    }
+    // fetchAssetAddresses with just the policy ID (no asset name) finds all
+    // tokens under this policy — i.e. all beacon holders.
+    holders = await provider.fetchAssetAddresses(beaconPolicyId);
   } catch {
-    // Koios unavailable — return empty diff
     return { created: [], removed: [], extended: [] };
   }
 
-  const uniqueAddresses = [...new Set(holders.map(h => h.payment_address))];
+  const uniqueAddresses = [...new Set(holders.map(h => h.address))];
 
   const utxos: BlockfrostUtxo[] = [];
   for (const addr of uniqueAddresses) {
     try {
-      // Use Koios directly (same as holder query) instead of Blockfrost client
-      const res = await fetch(`${koiosUrl}/address_utxos`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ _addresses: [addr], _extended: true }),
-      });
-      if (!res.ok) continue;
-      const raw = (await res.json()) as Array<Record<string, unknown>>;
+      const raw = await provider.fetchUtxos(addr) as Array<Record<string, unknown>>;
 
-      // Convert Koios format to Blockfrost-like format for downstream compatibility
       for (const u of raw) {
+        // Normalize response format (Koios vs Blockfrost)
         const assetList = u["asset_list"] as Array<Record<string, string>> | undefined;
-        const amount = [{ unit: "lovelace", quantity: String(u["value"] ?? "0") }];
+        const bfAmount = Array.isArray(u["amount"]) ? u["amount"] as Array<{ unit: string; quantity: string }> : [];
+        const amount = [{ unit: "lovelace", quantity: String(u["value"] ?? bfAmount.find(a => a.unit === "lovelace")?.quantity ?? "0") }];
         if (assetList) {
           for (const a of assetList) {
             amount.push({ unit: (a["policy_id"] ?? "") + (a["asset_name"] ?? ""), quantity: a["quantity"] ?? "0" });
           }
+        } else if (Array.isArray(u["amount"])) {
+          // Blockfrost format
+          for (const a of u["amount"] as Array<{ unit: string; quantity: string }>) {
+            if (a.unit !== "lovelace") amount.push(a);
+          }
         }
-        // Koios inline_datum has { bytes, value } — the scanner expects the value part
-        const koiosDatum = u["inline_datum"] as Record<string, unknown> | undefined;
-        const inlineDatum = koiosDatum?.["value"] as PlutusValue | undefined;
+
+        // Extract inline datum (Koios wraps in {bytes, value}, Blockfrost is direct)
+        const rawDatum = u["inline_datum"] as Record<string, unknown> | null;
+        const inlineDatum = rawDatum
+          ? ("value" in rawDatum ? rawDatum["value"] as PlutusValue : rawDatum as unknown as PlutusValue)
+          : null;
+
         const bfUtxo: BlockfrostUtxo = {
-          tx_hash: u["tx_hash"] as string,
-          tx_index: Number(u["tx_index"] ?? 0),
+          tx_hash: (u["tx_hash"] ?? u["tx_id"]) as string,
+          tx_index: Number(u["tx_index"] ?? u["output_index"] ?? 0),
           amount,
-          inline_datum: inlineDatum ?? null,
+          inline_datum: inlineDatum,
         };
         const hasBeacon = amount.some(
           (a) => a.unit.startsWith(beaconPolicyId) && a.unit.length > 56,

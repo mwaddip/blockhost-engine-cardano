@@ -136,8 +136,8 @@ function resolveStableToken(): AssetId {
  * Get a CardanoProvider configured from web3-defaults.yaml.
  */
 export function getProviderClient(): CardanoProvider {
-  const { blockfrostProjectId, network } = loadNetworkConfig();
-  return getProvider(network, blockfrostProjectId || undefined);
+  const { blockfrostProjectId, koiosUrl, network } = loadNetworkConfig();
+  return getProvider(network, blockfrostProjectId || undefined, koiosUrl || undefined);
 }
 
 // ── Formatting helpers ────────────────────────────────────────────────────────

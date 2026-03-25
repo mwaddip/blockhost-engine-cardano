@@ -75,12 +75,11 @@ async function poll(
   provider: CardanoProvider,
   beaconPolicyId: string,
   nftPolicyId: string,
-  network: string,
   adminConfig: ReturnType<typeof loadAdminConfig>,
 ): Promise<void> {
   while (running) {
     try {
-      const diff: ScanDiff = await scanBeacons(beaconPolicyId, network);
+      const diff: ScanDiff = await scanBeacons(provider, beaconPolicyId);
 
       // Process new subscriptions
       for (const sub of diff.created) {
@@ -195,7 +194,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const provider = getProvider(config.network, config.blockfrostProjectId || undefined);
+  const provider = getProvider(config.network, config.blockfrostProjectId || undefined, config.koiosUrl || undefined);
 
   // Load admin config (optional — null means admin commands are disabled)
   const adminConfig = loadAdminConfig();
@@ -230,7 +229,6 @@ async function main(): Promise<void> {
     provider,
     config.beaconPolicyId,
     config.nftPolicyId,
-    config.network,
     adminConfig,
   );
 }

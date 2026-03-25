@@ -41,9 +41,9 @@ export async function executeSend(
   if (!fromEntry.keyfile) throw new Error(`Role '${fromRole}' has no keyfile — cannot sign`);
 
   const mnemonic = fs.readFileSync(fromEntry.keyfile, "utf8").trim();
-  const { network, blockfrostProjectId } = loadNetworkConfig();
+  const { network, blockfrostProjectId, koiosUrl } = loadNetworkConfig();
   const wallet = await deriveWallet(mnemonic, network);
-  const provider = getProvider(network, blockfrostProjectId);
+  const provider = getProvider(network, blockfrostProjectId || undefined, koiosUrl || undefined);
 
   const isAda = asset.policyId === "" && asset.assetName === "";
 

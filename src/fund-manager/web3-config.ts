@@ -14,6 +14,8 @@ const POLICY_ID_RE = /^[0-9a-fA-F]{56}$/;
 export interface Web3Config {
   /** Blockfrost project ID — if empty/missing, Koios is used instead (free, no key) */
   readonly blockfrostProjectId: string;
+  /** Custom Koios base URL (e.g. https://koios.blockhost.io/api/v1) — falls back to public Koios */
+  readonly koiosUrl: string;
   readonly network: CardanoNetwork;
   readonly nftPolicyId: string;
   readonly subscriptionValidatorHash: string;
@@ -23,6 +25,7 @@ export interface Web3Config {
 
 interface RawBlockchain {
   readonly blockfrost_project_id?: string;
+  readonly koios_url?: string;
   readonly network?: string;
   readonly nft_policy_id?: string;
   readonly subscription_validator_hash?: string;
@@ -58,6 +61,7 @@ export function loadWeb3Config(): Web3Config {
 
   return {
     blockfrostProjectId: bc.blockfrost_project_id ?? "",
+    koiosUrl: bc.koios_url ?? "",
     network: parseNetwork(bc.network),
     nftPolicyId: requirePolicyId(bc.nft_policy_id, "blockchain.nft_policy_id"),
     subscriptionValidatorHash: requirePolicyId(
@@ -71,6 +75,7 @@ export function loadWeb3Config(): Web3Config {
 
 export function loadNetworkConfig(): {
   readonly blockfrostProjectId: string;
+  readonly koiosUrl: string;
   readonly network: CardanoNetwork;
 } {
   if (!fs.existsSync(WEB3_DEFAULTS_PATH)) {
@@ -81,6 +86,7 @@ export function loadNetworkConfig(): {
   const bc = raw.blockchain;
   return {
     blockfrostProjectId: bc?.blockfrost_project_id ?? "",
+    koiosUrl: bc?.koios_url ?? "",
     network: parseNetwork(bc?.network),
   };
 }
