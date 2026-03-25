@@ -1002,6 +1002,12 @@ def finalize_collateral(config: dict) -> tuple[bool, Optional[str]]:
 
         tx_hash = result.stdout.strip()
         config["_step_result_collateral"] = {"tx_hash": tx_hash}
+
+        # Wait for Koios to index the new UTxO so the next step
+        # (mint_nft) doesn't query stale inputs.
+        import time
+        time.sleep(25)
+
         return True, None
     except FileNotFoundError:
         return False, "bw CLI not found"
