@@ -330,7 +330,19 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
   }
 
   // Step 5: Mint NFT
-  const mintArgs: string[] = ["--owner-wallet", datum.subscriber];
+  // The subscriber field is a payment key hash — mint script needs a bech32 address.
+  // Build an enterprise address (key hash only, no staking) from the payment credential.
+  const { bech32 } = await import("bech32");
+  const { loadNetworkConfig } = await import("../fund-manager/web3-config.js");
+  const { network: currentNetwork } = loadNetworkConfig();
+  const headerByte = currentNetwork === "mainnet" ? 0x61 : 0x60;
+  const addrBytes = Buffer.from([headerByte, ...Buffer.from(datum.subscriber, "hex")]);
+  const subscriberAddress = bech32.encode(
+    currentNetwork === "mainnet" ? "addr" : "addr_test",
+    bech32.toWords(addrBytes),
+    256,
+  );
+  const mintArgs: string[] = ["--owner-wallet", subscriberAddress];
   if (userEncryptedOut) {
     mintArgs.push("--user-encrypted", userEncryptedOut);
   }
