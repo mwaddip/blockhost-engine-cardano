@@ -388,6 +388,8 @@ function generateWallet() {
         document.getElementById('deployer-address-hidden').value = data.address;
         document.getElementById('wallet-generated').classList.remove('hidden');
         btn.textContent = 'Regenerate';
+        _balanceFirstLoad.generate = true;
+        _lastBalanceLovelace.generate = 0;
         setTimeout(function() { checkBalance('generate'); }, 500);
         startAutoRefresh('generate');
     })
@@ -542,6 +544,8 @@ function updateContinueButton() {
     }
 }
 
+var _balanceFirstLoad = { generate: true, import: true };
+
 function checkBalance(mode) {
     var addr = mode === 'generate'
         ? document.getElementById('deployer-address').textContent.trim()
@@ -549,7 +553,12 @@ function checkBalance(mode) {
     var balanceEl = document.getElementById(mode === 'generate' ? 'wallet-balance' : 'import-wallet-balance');
     if (!addr || addr === '-') { balanceEl.textContent = '—'; return; }
 
-    balanceEl.textContent = '...';
+    // Only show "..." on the very first load, not on background refreshes
+    if (_balanceFirstLoad[mode]) {
+        balanceEl.textContent = '...';
+        _balanceFirstLoad[mode] = false;
+    }
+
     fetch('{{ url_for("engine_cardano.api_balance") }}', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -560,13 +569,14 @@ function checkBalance(mode) {
         var lovelace = 0;
         if (data && data.balance) {
             lovelace = parseInt(data.balance);
+        }
+        // Only update the display when the value actually changes
+        if (lovelace !== _lastBalanceLovelace[mode]) {
             var ada = (lovelace / 1000000).toFixed(2);
             balanceEl.textContent = ada + ' ADA';
-        } else {
-            balanceEl.textContent = '0 ADA';
+            _lastBalanceLovelace[mode] = lovelace;
+            updateContinueButton();
         }
-        _lastBalanceLovelace[mode] = lovelace;
-        updateContinueButton();
 
         // Stop auto-refresh once balance meets threshold
         if (lovelace >= getMinBalance() && _autoRefreshTimer) {
@@ -574,7 +584,7 @@ function checkBalance(mode) {
             _autoRefreshTimer = null;
         }
     })
-    .catch(function() { balanceEl.textContent = 'Error'; });
+    .catch(function() { /* keep last known value on error */ });
 }
 
 function startAutoRefresh(mode) {
