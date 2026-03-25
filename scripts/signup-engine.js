@@ -1824,9 +1824,22 @@
         document.getElementById('connection-result').classList.add('hidden');
 
         try {
-            // Query wallet UTXOs for CIP-68 user tokens under the NFT policy
+            // Query wallet UTXOs for CIP-68 user tokens under the NFT policy.
+            // Also check the enterprise address (payment key only, no staking) because
+            // the handler mints user tokens to enterprise addresses derived from the
+            // subscriber's payment key hash.
+            var walletBech32 = hexAddressToBech32(usedAddress);
+            var addrBytes = hexToBytes(usedAddress);
+            var paymentKeyHash = bytesToHex(addrBytes.slice(1, 29));
+            var networkByte = CONFIG.network === 'mainnet' ? '61' : '60';
+            var enterpriseHex = networkByte + paymentKeyHash;
+            var enterpriseBech32 = hexAddressToBech32(enterpriseHex);
+
+            var addresses = [walletBech32];
+            if (enterpriseBech32 !== walletBech32) addresses.push(enterpriseBech32);
+
             var rawUtxos = await koiosFetch('/address_utxos', {
-                _addresses: [hexAddressToBech32(usedAddress)],
+                _addresses: addresses,
                 _extended: true,
             });
             if (!rawUtxos || !Array.isArray(rawUtxos)) rawUtxos = [];
