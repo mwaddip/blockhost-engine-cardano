@@ -241,7 +241,7 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
 
   const vmId = allocateVmId();
   const vmName = formatVmName(vmId);
-  const expiryDays = calculateExpiryDays(datum.expiry);
+  const expiryDays = calculateExpiryDays(datum.expiry, BigInt(Date.now()));
 
   console.log("\n========== SUBSCRIPTION CREATED ==========");
   console.log(`Beacon:      ${beaconName}`);
