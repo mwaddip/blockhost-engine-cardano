@@ -45,8 +45,8 @@ const testingMode = fs.existsSync(TESTING_MODE_FILE);
 export function shouldRunFundCycle(): boolean {
   const state = loadState();
   if (testingMode) {
-    // Run every 30 seconds in testing mode
-    return Date.now() - state.last_fund_cycle >= 30_000;
+    // Run every 10 minutes in testing mode
+    return Date.now() - state.last_fund_cycle >= 600_000;
   }
   const config = loadFundManagerConfig();
   const intervalMs = config.fund_cycle_interval_hours * 3_600_000;
