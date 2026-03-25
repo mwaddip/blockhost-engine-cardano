@@ -75,11 +75,13 @@ async function poll(
   provider: CardanoProvider,
   beaconPolicyId: string,
   nftPolicyId: string,
+  koiosUrl: string,
+  network: string,
   adminConfig: ReturnType<typeof loadAdminConfig>,
 ): Promise<void> {
   while (running) {
     try {
-      const diff: ScanDiff = await scanBeacons(provider, beaconPolicyId);
+      const diff: ScanDiff = await scanBeacons(provider, beaconPolicyId, koiosUrl || undefined, network as any);
 
       // Process new subscriptions
       for (const sub of diff.created) {
@@ -229,6 +231,8 @@ async function main(): Promise<void> {
     provider,
     config.beaconPolicyId,
     config.nftPolicyId,
+    config.koiosUrl,
+    config.network,
     adminConfig,
   );
 }

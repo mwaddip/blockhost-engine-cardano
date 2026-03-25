@@ -16,6 +16,7 @@
  */
 
 import type { CardanoProvider } from "cmttk";
+import type { CardanoNetwork } from "../cardano/types.js";
 import type { SubscriptionDatum } from "../cardano/types.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -153,6 +154,8 @@ interface BlockfrostUtxo {
 export async function scanBeacons(
   provider: CardanoProvider,
   beaconPolicyId: string,
+  koiosUrl?: string,
+  network?: CardanoNetwork,
 ): Promise<ScanDiff> {
   // Restore known beacons from vms.json on first run
   loadKnownBeacons();
@@ -160,18 +163,34 @@ export async function scanBeacons(
   // ── Fetch current UTXOs by scanning for beacon tokens ──────────────────
   // Subscriptions live at CIP-89 addresses (per-subscriber), so we can't
   // query a single address. Instead, find all addresses holding beacon tokens
-  // via the provider, then fetch UTXOs from each.
+  // via Koios policy_asset_addresses, then fetch UTXOs from each.
+  //
+  // NOTE: We use a direct fetch for policy_asset_addresses because the
+  // cmttk provider only has fetchAssetAddresses (specific asset), not
+  // policy-wide discovery. UTxO fetching uses the provider normally.
 
-  let holders: Array<{ address: string; quantity: string }> = [];
+  const defaultKoiosUrl = network === "mainnet"
+    ? "https://api.koios.rest/api/v1"
+    : network === "preview"
+      ? "https://preview.koios.rest/api/v1"
+      : "https://preprod.koios.rest/api/v1";
+  const baseUrl = koiosUrl || defaultKoiosUrl;
+
+  let holders: Array<{ payment_address: string }> = [];
   try {
-    // fetchAssetAddresses with just the policy ID (no asset name) finds all
-    // tokens under this policy — i.e. all beacon holders.
-    holders = await provider.fetchAssetAddresses(beaconPolicyId);
+    const res = await fetch(`${baseUrl}/policy_asset_addresses`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ _asset_policy: beaconPolicyId }),
+    });
+    if (res.ok) {
+      holders = (await res.json()) as Array<{ payment_address: string }>;
+    }
   } catch {
     return { created: [], removed: [], extended: [] };
   }
 
-  const uniqueAddresses = [...new Set(holders.map(h => h.address))];
+  const uniqueAddresses = [...new Set(holders.map(h => h.payment_address))];
 
   const utxos: BlockfrostUtxo[] = [];
   for (const addr of uniqueAddresses) {
