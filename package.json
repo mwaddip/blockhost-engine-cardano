@@ -15,8 +15,8 @@
   "dependencies": {
     "@noble/curves": "^1.8.0",
     "@noble/hashes": "^1.7.0",
+    "@scure/bip39": "^2.0.1",
     "bech32": "^2.0.0",
-    "bip39": "^3.1.0",
     "cmttk": "github:mwaddip/cmttk#v0.5.0",
     "js-yaml": "^4.1.1",
     "noble-bip32ed25519": "github:mwaddip/noble-bip32ed25519#v0.1.0"

@@ -20,7 +20,8 @@ import { secp256k1 } from "@noble/curves/secp256k1";
 import { bytesToHex } from "@noble/hashes/utils";
 import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
-import { generateMnemonic, validateMnemonic } from "bip39";
+import { generateMnemonic, validateMnemonic } from "@scure/bip39";
+import { wordlist as english } from "@scure/bip39/wordlists/english.js";
 import { deriveWallet } from "cmttk";
 
 function parseArgs(args: string[]): { command: string; flags: Record<string, string> } {
@@ -143,7 +144,7 @@ async function main(): Promise<void> {
     case "keygen": {
       // Generate BIP39 mnemonic + derive Cardano wallet via Lucid.
       const net = resolveNetwork(flags["network"] ?? "preprod");
-      const mnemonic = generateMnemonic(256); // 24 words
+      const mnemonic = generateMnemonic(english, 256); // 24 words
       const info = await deriveAddress(mnemonic, net);
       process.stdout.write(
         JSON.stringify({
@@ -158,7 +159,7 @@ async function main(): Promise<void> {
     case "validate-mnemonic": {
       const mnemonic = process.env["MNEMONIC"];
       if (!mnemonic) die("MNEMONIC environment variable not set");
-      if (!validateMnemonic(mnemonic)) die("invalid mnemonic phrase");
+      if (!validateMnemonic(mnemonic, english)) die("invalid mnemonic phrase");
       const net = resolveNetwork(flags["network"] ?? "preprod");
       const info = await deriveAddress(mnemonic, net);
       process.stdout.write(

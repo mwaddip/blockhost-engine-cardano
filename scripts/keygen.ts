@@ -20,7 +20,8 @@
  * Exit: 0 = success, 1 = failure
  */
 
-import { generateMnemonic } from "bip39";
+import { generateMnemonic } from "@scure/bip39";
+import { wordlist as english } from "@scure/bip39/wordlists/english.js";
 import { deriveWallet } from "cmttk";
 import type { CardanoNetwork } from "../src/cardano/types.js";
 
@@ -59,7 +60,7 @@ const network = resolveNetwork(networkArg);
 async function main(): Promise<void> {
   // generateMnemonic() returns 12 words by default (128-bit entropy).
   // Use 256-bit entropy for 24 words — standard for Cardano wallets.
-  const mnemonic = generateMnemonic(256);
+  const mnemonic = generateMnemonic(english, 256);
   const wallet   = await deriveWallet(mnemonic, network);
 
   const output = {
