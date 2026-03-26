@@ -691,7 +691,18 @@ function parseCip30Utxo(cborHex) {
             var val = output.has(1n) ? output.get(1n) : output.get(1);
             lovelace = (typeof val === 'bigint' || typeof val === 'number') ? BigInt(val) : (Array.isArray(val) ? BigInt(val[0]) : 0n);
         }
-        return { txHash: txHash, index: Number(input[1]), lovelace: lovelace };
+        // Detect tokens: value is [lovelace, multiasset] when tokens present, plain int when ADA-only
+        var hasTokens = false;
+        if (Array.isArray(output)) {
+            var val = output[1];
+            if (Array.isArray(val) && val.length >= 2) hasTokens = true;
+            else if (val instanceof Map && val.size > 0) hasTokens = true;
+        } else if (output instanceof Map) {
+            var val = output.has(1n) ? output.get(1n) : output.get(1);
+            if (Array.isArray(val) && val.length >= 2) hasTokens = true;
+            else if (val instanceof Map && val.size > 0) hasTokens = true;
+        }
+        return { txHash: txHash, index: Number(input[1]), lovelace: lovelace, hasTokens: hasTokens };
     } catch (e) { return null; }
 }
 
@@ -761,8 +772,11 @@ async function topUpWallet(mode) {
         var estimatedFee = 200000n;
         var target = lovelace + estimatedFee;
         var selected = []; var inputTotal = 0n;
-        for (var i = 0; i < utxos.length && inputTotal < target; i++) {
-            if (utxos[i].lovelace > 0n) { selected.push(utxos[i]); inputTotal += utxos[i].lovelace; }
+        // Only select ADA-only UTxOs — avoid consuming token-bearing UTxOs
+        // which would require reproducing tokens in the change output.
+        var adaOnlyUtxos = utxos.filter(function(u) { return !u.hasTokens; });
+        for (var i = 0; i < adaOnlyUtxos.length && inputTotal < target; i++) {
+            if (adaOnlyUtxos[i].lovelace > 0n) { selected.push(adaOnlyUtxos[i]); inputTotal += adaOnlyUtxos[i].lovelace; }
         }
         if (inputTotal < target) throw new Error('Insufficient ADA (' + (Number(inputTotal) / 1e6).toFixed(2) + ' available)');
 
