@@ -1081,6 +1081,8 @@ def finalize_mint_nft(config: dict) -> tuple[bool, Optional[str]]:
                 )
                 if result.returncode == 0 and result.stdout.strip():
                     user_encrypted = result.stdout.strip()
+                    if user_encrypted.startswith("0x"):
+                        user_encrypted = user_encrypted[2:]
             except (FileNotFoundError, subprocess.TimeoutExpired):
                 pass
 
