@@ -148,43 +148,46 @@ export async function runFundManager(): Promise<void> {
       console.error(`[FUND] Step 1 (collection) failed: ${err}`);
     }
 
-    await pause();
+    // Steps 2-5: distribution — skip in testing mode to preserve deployer ADA
+    if (!testingMode) {
+      await pause();
 
-    // Steps 2-5: each wrapped so a single failure doesn't skip the rest
+      try {
+        // Step 2: Top up hot wallet ADA from server
+        await topUpHotWalletGas(book, config);
+      } catch (err) {
+        console.error(`[FUND] Step 2 (hot wallet gas) failed: ${err}`);
+      }
 
-    try {
-      // Step 2: Top up hot wallet ADA from server
-      await topUpHotWalletGas(book, config);
-    } catch (err) {
-      console.error(`[FUND] Step 2 (hot wallet gas) failed: ${err}`);
-    }
+      await pause();
 
-    await pause();
+      try {
+        // Step 3: Top up server stablecoin buffer from hot wallet
+        await topUpServerStablecoinBuffer(book, config);
+      } catch (err) {
+        console.error(`[FUND] Step 3 (stablecoin buffer) failed: ${err}`);
+      }
 
-    try {
-      // Step 3: Top up server stablecoin buffer from hot wallet
-      await topUpServerStablecoinBuffer(book, config);
-    } catch (err) {
-      console.error(`[FUND] Step 3 (stablecoin buffer) failed: ${err}`);
-    }
+      await pause();
 
-    await pause();
+      try {
+        // Step 4: Revenue shares (hot → dev/broker)
+        const revenueConfig = loadRevenueShareConfig();
+        await distributeRevenueShares(book, revenueConfig);
+      } catch (err) {
+        console.error(`[FUND] Step 4 (revenue shares) failed: ${err}`);
+      }
 
-    try {
-      // Step 4: Revenue shares (hot → dev/broker)
-      const revenueConfig = loadRevenueShareConfig();
-      await distributeRevenueShares(book, revenueConfig);
-    } catch (err) {
-      console.error(`[FUND] Step 4 (revenue shares) failed: ${err}`);
-    }
+      await pause();
 
-    await pause();
-
-    try {
-      // Step 5: Remainder to admin (hot → admin)
-      await sendRemainderToAdmin(book);
-    } catch (err) {
-      console.error(`[FUND] Step 5 (remainder to admin) failed: ${err}`);
+      try {
+        // Step 5: Remainder to admin (hot → admin)
+        await sendRemainderToAdmin(book);
+      } catch (err) {
+        console.error(`[FUND] Step 5 (remainder to admin) failed: ${err}`);
+      }
+    } else {
+      console.log("[FUND] Testing mode — skipping distribution steps 2-5");
     }
 
     console.log("[FUND] Fund cycle complete");
