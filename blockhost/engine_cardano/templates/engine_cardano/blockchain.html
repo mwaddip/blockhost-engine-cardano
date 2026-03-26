@@ -389,6 +389,7 @@ function generateWallet() {
         document.getElementById('wallet-generated').classList.remove('hidden');
         btn.textContent = 'Regenerate';
         _balanceFirstLoad.generate = true;
+        _balanceFirstResponse.generate = true;
         _lastBalanceLovelace.generate = 0;
         setTimeout(function() { checkBalance('generate'); }, 500);
         startAutoRefresh('generate');
@@ -545,6 +546,7 @@ function updateContinueButton() {
 }
 
 var _balanceFirstLoad = { generate: true, import: true };
+var _balanceFirstResponse = { generate: true, import: true };
 
 function checkBalance(mode) {
     var addr = mode === 'generate'
@@ -570,8 +572,9 @@ function checkBalance(mode) {
         if (data && data.balance) {
             lovelace = parseInt(data.balance);
         }
-        // Only update the display when the value actually changes
-        if (lovelace !== _lastBalanceLovelace[mode]) {
+        // Update display on first response or when value changes
+        if (_balanceFirstResponse[mode] || lovelace !== _lastBalanceLovelace[mode]) {
+            _balanceFirstResponse[mode] = false;
             var ada = (lovelace / 1000000).toFixed(2);
             balanceEl.textContent = ada + ' ADA';
             _lastBalanceLovelace[mode] = lovelace;
