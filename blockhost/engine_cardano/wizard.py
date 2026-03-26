@@ -1108,6 +1108,11 @@ def finalize_mint_nft(config: dict) -> tuple[bool, Optional[str]]:
             "token_id": token_id,
             "owner": admin_wallet,
         }
+
+        # Wait for Koios to index the mint UTxOs before the next step
+        import time
+        time.sleep(25)
+
         return True, None
     except subprocess.TimeoutExpired:
         return False, "NFT minting timed out (waited for Cardano confirmation)"
