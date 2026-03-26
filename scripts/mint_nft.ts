@@ -274,6 +274,21 @@ async function main(): Promise<void> {
     process.stderr.write("WARNING: reference_store_address not configured, using deployer address (datum unprotected)\n");
   }
 
+  // Compute min-UTxO for outputs: (160 + estimatedOutputSize) * coinsPerUtxoByte
+  // User token output: address(~60) + value(~20) + token(~70) ≈ 150 bytes
+  // Reference token output: address(~60) + value(~20) + token(~70) + datum(variable) ≈ 150 + datumSize
+  const pp = await provider.fetchProtocolParams();
+  const coinsPerByte = BigInt(pp.coinsPerUtxoByte);
+  const userTokenMinUtxo = (160n + 150n) * coinsPerByte;
+  const datumSizeEstimate = BigInt(Math.ceil(referenceDatum.length / 2)); // hex → bytes
+  const refTokenMinUtxo = (160n + 150n + datumSizeEstimate) * coinsPerByte;
+
+  // Floor at 1.1 ADA (protocol minimum)
+  const userLovelace = userTokenMinUtxo < 1_100_000n ? 1_100_000n : userTokenMinUtxo;
+  const refLovelace = refTokenMinUtxo < 1_100_000n ? 1_100_000n : refTokenMinUtxo;
+
+  process.stderr.write(`Min UTxO: user=${Number(userLovelace) / 1e6} ADA, ref=${Number(refLovelace) / 1e6} ADA\n`);
+
   const txHash = await buildAndSubmitScriptTx({
     provider,
     walletAddress: deployerAddress,
@@ -282,12 +297,12 @@ async function main(): Promise<void> {
       // User token (222) → owner
       {
         address: ownerWallet,
-        assets: { lovelace: 2_000_000n, [policyId + userAssetName]: 1n },
+        assets: { lovelace: userLovelace, [policyId + userAssetName]: 1n },
       },
       // Reference token (100) → reference store script with inline datum
       {
         address: refOutputAddress,
-        assets: { lovelace: 2_000_000n, [policyId + refAssetName]: 1n },
+        assets: { lovelace: refLovelace, [policyId + refAssetName]: 1n },
         datumCbor: referenceDatum,
       },
     ],

@@ -456,7 +456,6 @@ def get_post_finalization_steps() -> list[tuple]:
     """
     return [
         ("revenue_share", "Configuring revenue sharing", finalize_revenue_share),
-        ("collateral", "Setting up Plutus collateral UTxO", finalize_collateral),
         ("mint_nft", "Minting admin credential NFT", finalize_mint_nft),
         ("plan", "Creating subscription plan", finalize_plan),
     ]
