@@ -17,7 +17,7 @@
     "@noble/hashes": "^1.7.0",
     "@scure/bip39": "^2.0.1",
     "bech32": "^2.0.0",
-    "cmttk": "github:mwaddip/cmttk#v0.5.1",
+    "cmttk": "github:mwaddip/cmttk#v0.5.2",
     "js-yaml": "^4.1.1",
     "noble-bip32ed25519": "github:mwaddip/noble-bip32ed25519#v0.1.0"
   },
