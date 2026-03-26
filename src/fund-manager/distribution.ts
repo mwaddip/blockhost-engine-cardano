@@ -50,9 +50,10 @@ export async function topUpHotWalletGas(
 
   const needed = config.hot_wallet_gas_lovelace - hotBal.adaBalance;
 
-  // Require server to have at least 2× what we need
+  // Require server to keep a healthy reserve for minting and other operations
+  const MIN_SERVER_RESERVE = 20_000_000n; // 20 ADA
   const serverBal = await executeBalance("server", undefined, book);
-  if (serverBal.adaBalance < needed * 2n) {
+  if (serverBal.adaBalance < needed + MIN_SERVER_RESERVE) {
     console.warn(
       `[FUND] Server ADA too low to top up hot wallet ` +
       `(server: ${formatAda(serverBal.adaBalance)}, needed: ${formatAda(needed)})`,
