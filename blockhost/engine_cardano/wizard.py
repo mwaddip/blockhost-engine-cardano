@@ -1269,13 +1269,16 @@ def finalize_revenue_share(config: dict) -> tuple[bool, Optional[str]]:
         rev_path.write_text(json.dumps(rev_config, indent=2) + "\n")
         _set_blockhost_ownership(rev_path, 0o640)
 
-        # Install and enable blockhost-monitor service
-        svc_src = Path("/usr/share/blockhost/examples/blockhost-monitor.service")
-        svc_dst = Path("/etc/systemd/system/blockhost-monitor.service")
-        if svc_src.exists() and not svc_dst.exists():
+        # Enable blockhost-monitor service.
+        # The .deb installs the unit file to /lib/systemd/system/.
+        # If it's not there (dev mode), try copying from examples/.
+        svc_installed = Path("/lib/systemd/system/blockhost-monitor.service")
+        svc_examples = Path("/usr/share/blockhost/examples/blockhost-monitor.service")
+        svc_etc = Path("/etc/systemd/system/blockhost-monitor.service")
+        if not svc_installed.exists() and not svc_etc.exists() and svc_examples.exists():
             import shutil
-            shutil.copy2(str(svc_src), str(svc_dst))
-            subprocess.run(["systemctl", "daemon-reload"], capture_output=True, timeout=30)
+            shutil.copy2(str(svc_examples), str(svc_etc))
+        subprocess.run(["systemctl", "daemon-reload"], capture_output=True, timeout=30)
         subprocess.run(
             ["systemctl", "enable", "blockhost-monitor"],
             capture_output=True,
