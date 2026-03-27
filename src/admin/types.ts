@@ -37,9 +37,10 @@ export interface AdminConfig {
  * Command definition in admin-commands.json
  */
 export interface CommandDefinition {
-  action: string;                   // Action type: 'knock', etc.
-  description?: string;             // Admin reference only
-  params: Record<string, unknown>;  // Action-specific configuration
+  action: string;                    // Action type: 'knock', etc.
+  description?: string;              // Admin reference only
+  params: Record<string, unknown>;   // Per-command parameters (ports, duration, source)
+  config?: Record<string, unknown>;  // Action constraints (allowed_ports, default_duration); defaults to params
 }
 
 /**

@@ -363,8 +363,10 @@ export async function executeKnock(
     }
 
     // Set timeout to close ports (phase 1 duration limit)
-    const timeoutId = setTimeout(async () => {
-      await closeKnock(txHash, "timeout");
+    const timeoutId = setTimeout(() => {
+      closeKnock(txHash, "timeout").catch((err) => {
+        console.error(`[KNOCK] Error closing knock on timeout: ${err}`);
+      });
     }, duration * 1000);
 
     // Track this knock

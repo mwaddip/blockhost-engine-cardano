@@ -64,8 +64,9 @@ export async function executeBalance(
       unit,
       quantity: qty.toString(),
     }));
-  } catch {
-    // Address not found or no UTXOs — treat as zero
+  } catch (err) {
+    // Address not found or no UTXOs — treat as zero, but log the error
+    console.error(`[WARN] Could not fetch UTXOs for ${address}: ${err instanceof Error ? err.message : err}`);
     amounts = [];
   }
 

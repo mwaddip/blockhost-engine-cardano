@@ -1,11 +1,12 @@
 use aiken/collection/list
 use aiken/crypto.{VerificationKeyHash}
 use blockhost/types.{
-  Migrate, ServiceCollect, SubscriberCancel, SubscriberExtend,
+  AssetId, Migrate, ServiceCollect, SubscriberCancel, SubscriberExtend,
   SubscriptionDatum, SubscriptionRedeemer,
 }
 use blockhost/utils.{signed_by}
 use cardano/address.{Script, VerificationKey}
+use cardano/assets
 use aiken/interval.{Finite}
 use cardano/transaction.{InlineDatum, Input, Output, OutputReference, Transaction}
 
@@ -25,6 +26,16 @@ fn find_continuing_output(
   expect Some(own_input) = find_own_input(tx.inputs, own_ref)
   let own_address = own_input.output.address
   list.find(tx.outputs, fn(output) { output.address == own_address })
+}
+
+/// Get the subscription's payment asset amount from a value.
+/// ADA (empty policy_id) → lovelace; native token → token quantity.
+fn payment_amount(value, payment: AssetId) -> Int {
+  if payment.policy_id == #"" {
+    assets.lovelace_of(value)
+  } else {
+    assets.quantity_of(value, payment.policy_id, payment.asset_name)
+  }
 }
 
 /// Extract an inline SubscriptionDatum from an output
@@ -102,6 +113,7 @@ validator subscription(
         let new_last_collected =
           datum.last_collected + intervals * datum.interval_ms
         and {
+          // Datum immutability
           new_datum.plan_id == datum.plan_id,
           new_datum.expiry == datum.expiry,
           new_datum.subscriber_key_hash == datum.subscriber_key_hash,
@@ -110,8 +122,12 @@ validator subscription(
           new_datum.payment_asset == datum.payment_asset,
           new_datum.beacon_policy_id == datum.beacon_policy_id,
           new_datum.user_encrypted == datum.user_encrypted,
+          new_datum.creation_height == datum.creation_height,
+          // Datum transitions
           new_datum.amount_remaining == datum.amount_remaining - earned,
           new_datum.last_collected == new_last_collected,
+          // Value preservation — output must hold at least the remaining balance
+          payment_amount(continuing_output.value, datum.payment_asset) >= new_datum.amount_remaining,
         }
       }
 
@@ -131,7 +147,10 @@ validator subscription(
               fn(output) {
                 when output.address.payment_credential is {
                   VerificationKey(hash) ->
-                    hash == service_address_key_hash
+                    hash == service_address_key_hash && payment_amount(
+                      output.value,
+                      datum.payment_asset,
+                    ) >= earned
                   _ -> False
                 }
               },
@@ -147,7 +166,10 @@ validator subscription(
               fn(output) {
                 when output.address.payment_credential is {
                   VerificationKey(hash) ->
-                    hash == datum.subscriber_key_hash
+                    hash == datum.subscriber_key_hash && payment_amount(
+                      output.value,
+                      datum.payment_asset,
+                    ) >= refund
                   _ -> False
                 }
               },
@@ -176,20 +198,31 @@ validator subscription(
           new_datum.rate_per_interval == datum.rate_per_interval,
           new_datum.interval_ms == datum.interval_ms,
           new_datum.last_collected == datum.last_collected,
+          new_datum.user_encrypted == datum.user_encrypted,
+          new_datum.creation_height == datum.creation_height,
           // Can only increase
           new_datum.amount_remaining >= datum.amount_remaining,
           new_datum.expiry >= datum.expiry,
+          // Value preservation — output must hold at least the claimed balance
+          payment_amount(continuing_output.value, datum.payment_asset) >= new_datum.amount_remaining,
         }
       }
 
       // Migration to new validator (upgrade escape hatch)
       Migrate { new_validator_hash } -> {
         expect signed_by(tx, server_key_hash)
+        expect Some(own_input) = find_own_input(tx.inputs, own_ref)
+        let input_payment =
+          payment_amount(own_input.output.value, datum.payment_asset)
         list.any(
           tx.outputs,
           fn(output) {
             when output.address.payment_credential is {
-              Script(hash) -> hash == new_validator_hash
+              Script(hash) ->
+                hash == new_validator_hash && payment_amount(
+                  output.value,
+                  datum.payment_asset,
+                ) >= input_payment
               _ -> False
             }
           },

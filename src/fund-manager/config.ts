@@ -9,9 +9,8 @@
 import * as fs from "fs";
 import * as yaml from "js-yaml";
 import type { FundManagerConfig, RevenueShareConfig } from "./types.js";
+import { BLOCKHOST_CONFIG_PATH, CONFIG_DIR } from "../paths.js";
 
-const CONFIG_DIR = process.env["BLOCKHOST_CONFIG_DIR"] ?? "/etc/blockhost";
-const BLOCKHOST_CONFIG_PATH = `${CONFIG_DIR}/blockhost.yaml`;
 const REVENUE_SHARE_PATH = `${CONFIG_DIR}/revenue-share.json`;
 
 const DEFAULTS: FundManagerConfig = {

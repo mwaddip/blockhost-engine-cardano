@@ -12,9 +12,8 @@ import {
   generateWallet as rootAgentGenerateWallet,
   addressbookSave,
 } from "../root-agent/client.js";
+import { ADDRESSBOOK_PATH, CONFIG_DIR } from "../paths.js";
 
-const CONFIG_DIR = process.env["BLOCKHOST_CONFIG_DIR"] ?? "/etc/blockhost";
-const ADDRESSBOOK_PATH = `${CONFIG_DIR}/addressbook.json`;
 const HOT_KEY_PATH = `${CONFIG_DIR}/hot.key`;
 
 /**

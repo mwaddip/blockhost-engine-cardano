@@ -516,6 +516,10 @@
 
     // ── UI helpers ────────────────────────────────────────────────────────
 
+    function escapeHtml(str) {
+        return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
     function showStatus(elementId, message, type) {
         var el = document.getElementById(elementId);
         if (!el) return;
@@ -707,7 +711,7 @@
 
         } catch (err) {
             console.error('connectWallet error:', err);
-            showStatus('subscribe-status', 'Wallet connection failed: ' + (err.message || err), 'error');
+            showStatus('subscribe-status', 'Wallet connection failed: ' + escapeHtml(err.message || err), 'error');
             updateStep(1, 'error');
         }
     }
@@ -970,7 +974,7 @@
 
         } catch (err) {
             console.error('subscribe error:', err);
-            showStatus('subscribe-status', (err.message || 'Subscription failed'), 'error');
+            showStatus('subscribe-status', escapeHtml(err.message || 'Subscription failed'), 'error');
             updateStep(3, 'error');
             btn.disabled = false;
             btn.textContent = 'Subscribe';
@@ -1991,7 +1995,7 @@
             statusEl.innerHTML = '';
         } catch (err) {
             console.error('Decrypt error:', err);
-            showStatus('decrypt-wallet-status', err.message || 'Decryption failed', 'error');
+            showStatus('decrypt-wallet-status', escapeHtml(err.message || 'Decryption failed'), 'error');
         } finally {
             btn.disabled = false;
         }
@@ -2044,7 +2048,7 @@
             document.getElementById('offline-nft-info').classList.remove('hidden');
         } catch (err) {
             console.error('NFT lookup error:', err);
-            showStatus('offline-lookup-status', 'Lookup failed: ' + (err.message || err), 'error');
+            showStatus('offline-lookup-status', 'Lookup failed: ' + escapeHtml(err.message || err), 'error');
         } finally {
             btn.disabled = false;
         }
@@ -2163,7 +2167,7 @@
 
         } catch (err) {
             console.error('Command error:', err);
-            showStatus('command-status', err.message || 'Failed to send command', 'error');
+            showStatus('command-status', escapeHtml(err.message || 'Failed to send command'), 'error');
         } finally {
             btn.disabled = false;
         }

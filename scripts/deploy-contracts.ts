@@ -46,10 +46,9 @@ import {
 import type { CardanoNetwork } from "../src/cardano/types.js";
 import { blake2b } from "@noble/hashes/blake2b";
 import { PrivateKey } from "noble-bip32ed25519";
+import { CONFIG_DIR } from "../src/paths.js";
 
 // ── Config ──────────────────────────────────────────────────────────────────
-
-const CONFIG_DIR = process.env["BLOCKHOST_CONFIG_DIR"] ?? "/etc/blockhost";
 const NETWORK = (process.env["CARDANO_NETWORK"] ?? "preprod") as CardanoNetwork;
 const MODE = process.argv[2] ?? "all";
 

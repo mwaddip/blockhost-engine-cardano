@@ -27,6 +27,13 @@ export const IMMUTABLE_ROLES = new Set([
   "broker",
 ]);
 
+export function assertMutableRole(name: string): void {
+  if (IMMUTABLE_ROLES.has(name)) {
+    console.error(`Error: '${name}' is a reserved system role and cannot be modified.`);
+    process.exit(1);
+  }
+}
+
 function printUsage(): void {
   console.log("ab (addressbook) — manage wallet entries in addressbook.json");
   console.log("");

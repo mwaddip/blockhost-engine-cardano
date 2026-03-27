@@ -10,9 +10,7 @@
 import * as fs from "fs";
 import * as yaml from "js-yaml";
 import type { Addressbook } from "../../fund-manager/types.js";
-
-const CONFIG_DIR = process.env["BLOCKHOST_CONFIG_DIR"] ?? "/etc/blockhost";
-const WEB3_DEFAULTS_PATH = `${CONFIG_DIR}/web3-defaults.yaml`;
+import { WEB3_DEFAULTS_PATH } from "../../paths.js";
 
 /**
  * CLI handler

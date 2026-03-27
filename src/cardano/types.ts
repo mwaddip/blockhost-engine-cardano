@@ -28,33 +28,6 @@ export interface AssetId {
   assetName: string;         // hex-encoded asset name
 }
 
-// ── Redeemers ────────────────────────────────────────────────────────
-
-export type SubscriptionRedeemer =
-  | { tag: "ServiceCollect" }
-  | { tag: "SubscriberCancel" }
-  | { tag: "SubscriberExtend" }
-  | { tag: "Migrate"; newValidatorHash: string };
-
-export type BeaconRedeemer =
-  | { tag: "CreateSubscription" }
-  | { tag: "CloseSubscription" };
-
-export type NftRedeemer =
-  | { tag: "Mint" }
-  | { tag: "UpdateReference" };
-
-// ── Plan reference datum ─────────────────────────────────────────────
-
-/** Plan datum held at the plan reference UTXO */
-export interface PlanDatum {
-  planId: number;
-  name: string;
-  pricePerDay: bigint;       // in payment token base units
-  paymentAssets: AssetId[];  // allowed payment tokens
-  active: boolean;
-}
-
 // ── CIP-68 NFT reference datum ───────────────────────────────────────
 
 /** CIP-68 reference datum for access credential NFTs */

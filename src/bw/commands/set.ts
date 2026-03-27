@@ -17,8 +17,7 @@ import type { Utxo, Assets } from "cmttk";
 import { hexToBytes, bytesToHex, cborArray, cborBytes, decodeCbor } from "cmttk";
 import { referenceTokenAssetName } from "../../nft/mint.js";
 import * as fs from "fs";
-
-const CONFIG_DIR = process.env["BLOCKHOST_CONFIG_DIR"] ?? "/etc/blockhost";
+import { CONFIG_DIR, MIN_ADA_FOR_TOKEN_OUTPUT } from "../../paths.js";
 
 // ── Datum encoding ───────────────────────────────────────────────────────────
 
@@ -204,7 +203,7 @@ async function setEncryptCommand(
 
   // Output assets: keep reference token + min ADA
   const outputAssets: Assets = {
-    lovelace: refUtxo.lovelace > 2_000_000n ? refUtxo.lovelace : 2_000_000n,
+    lovelace: refUtxo.lovelace > MIN_ADA_FOR_TOKEN_OUTPUT ? refUtxo.lovelace : MIN_ADA_FOR_TOKEN_OUTPUT,
     [refUnit]: 1n,
   };
 

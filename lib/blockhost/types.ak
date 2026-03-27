@@ -36,23 +36,6 @@ pub type SubscriptionDatum {
   creation_height: Int,
 }
 
-/// Plan reference datum — stored in a reference UTXO readable by anyone
-pub type PlanDatum {
-  plan_id: Int,
-  name: ByteArray,
-  /// Price per day in payment token base units
-  price_per_day: Int,
-  /// List of accepted payment token policy IDs
-  accepted_payment_assets: List<AssetId>,
-  active: Bool,
-}
-
-/// NFT reference datum (CIP-68) — stores encrypted connection details
-pub type NftReferenceDatum {
-  /// ECIES-encrypted connection details
-  user_encrypted: ByteArray,
-}
-
 /// Subscription validator redeemers
 pub type SubscriptionRedeemer {
   /// Service collects payment (server-authorized)

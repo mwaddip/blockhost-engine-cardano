@@ -11,9 +11,7 @@ import type { CardanoProvider } from "cmttk";
 import type { AssetId } from "../cardano/types.js";
 import { loadNetworkConfig } from "../fund-manager/web3-config.js";
 import type { Addressbook, AddressbookEntry } from "../fund-manager/types.js";
-
-const CONFIG_DIR = process.env["BLOCKHOST_CONFIG_DIR"] ?? "/etc/blockhost";
-const ADDRESSBOOK_PATH = `${CONFIG_DIR}/addressbook.json`;
+import { CONFIG_DIR, ADDRESSBOOK_PATH } from "../paths.js";
 
 // ── Addressbook ────────────────────────────────────────────────────────────────
 

@@ -16,9 +16,7 @@ import * as yaml from "js-yaml";
 import { findNftHolder } from "../../nft/reference.js";
 import { getProviderClient } from "../cli-utils.js";
 import { loadWeb3Config } from "../../fund-manager/web3-config.js";
-
-const CONFIG_DIR = process.env["BLOCKHOST_CONFIG_DIR"] ?? "/etc/blockhost";
-const BLOCKHOST_CONFIG_PATH = `${CONFIG_DIR}/blockhost.yaml`;
+import { BLOCKHOST_CONFIG_PATH } from "../../paths.js";
 
 // ── Admin NFT ID loader ───────────────────────────────────────────────────────
 

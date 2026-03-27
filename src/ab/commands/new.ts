@@ -4,7 +4,7 @@
 
 import { loadAddressbook } from "../../bw/cli-utils.js";
 import { generateWallet as rootAgentGenerateWallet } from "../../root-agent/client.js";
-import { IMMUTABLE_ROLES } from "../index.js";
+import { assertMutableRole } from "../index.js";
 
 export async function newCommand(args: string[]): Promise<void> {
   if (args.length !== 1) {
@@ -25,12 +25,7 @@ export async function newCommand(args: string[]): Promise<void> {
     process.exit(1);
   }
 
-  if (IMMUTABLE_ROLES.has(name)) {
-    console.error(
-      `Error: '${name}' is a reserved system role and cannot be modified.`,
-    );
-    process.exit(1);
-  }
+  assertMutableRole(name);
 
   const book = loadAddressbook();
 

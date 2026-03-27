@@ -19,10 +19,9 @@ import type { CardanoProvider } from "cmttk";
 import { spawnSync } from "child_process";
 import { findNftHolder } from "../nft/reference.js";
 import { getCommand } from "../provisioner.js";
+import { STATE_DIR, PYTHON_TIMEOUT_MS } from "../paths.js";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-
-const WORKING_DIR = "/var/lib/blockhost";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -164,8 +163,8 @@ print(json.dumps(result))
 `;
 
   const result = spawnSync("python3", ["-c", script], {
-    timeout: 10_000,
-    cwd: WORKING_DIR,
+    timeout: PYTHON_TIMEOUT_MS,
+    cwd: STATE_DIR,
     encoding: "utf8",
   });
 
@@ -199,8 +198,8 @@ if vm:
 `;
 
   const result = spawnSync("python3", ["-c", script], {
-    timeout: 10_000,
-    cwd: WORKING_DIR,
+    timeout: PYTHON_TIMEOUT_MS,
+    cwd: STATE_DIR,
     encoding: "utf8",
     env: { ...process.env, VM_NAME: vmName, NEW_OWNER: newOwner },
   });
@@ -225,8 +224,8 @@ if vm:
 `;
 
   const result = spawnSync("python3", ["-c", script], {
-    timeout: 10_000,
-    cwd: WORKING_DIR,
+    timeout: PYTHON_TIMEOUT_MS,
+    cwd: STATE_DIR,
     encoding: "utf8",
     env: { ...process.env, VM_NAME: vmName, SYNCED: synced ? "true" : "false" },
   });
@@ -248,7 +247,7 @@ function callUpdateGecos(vmName: string, walletAddress: string, nftTokenId: numb
     const result = spawnSync(
       cmd,
       [vmName, walletAddress, "--nft-id", String(nftTokenId)],
-      { timeout: 30_000, cwd: WORKING_DIR, encoding: "utf8" },
+      { timeout: 30_000, cwd: STATE_DIR, encoding: "utf8" },
     );
 
     if (result.status === 0) return true;

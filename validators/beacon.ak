@@ -1,4 +1,5 @@
 use aiken/collection/dict
+use aiken/collection/list
 use aiken/crypto.{ScriptHash}
 use blockhost/types.{BeaconRedeemer, CloseSubscription, CreateSubscription}
 use cardano/assets.{PolicyId}
@@ -26,15 +27,23 @@ validator beacon(subscription_validator_hash: ScriptHash) {
             fn(_name, qty, acc) { acc && qty == 1 },
           )
 
-        // Verify that at least one output goes to the subscription validator address
-        let has_subscription_output =
-          transaction.find_script_outputs(
-            tx.outputs,
-            subscription_validator_hash,
+        // Verify at least one subscription validator output holds a beacon from this policy
+        let beacon_at_validator =
+          list.any(
+            transaction.find_script_outputs(
+              tx.outputs,
+              subscription_validator_hash,
+            ),
+            fn(output) {
+              dict.foldl(
+                assets.tokens(output.value, policy_id),
+                False,
+                fn(_name, _qty, _acc) { True },
+              )
+            },
           )
-            |> has_any
 
-        all_qty_one && has_subscription_output
+        all_qty_one && beacon_at_validator
       }
 
       CloseSubscription -> {
@@ -50,14 +59,6 @@ validator beacon(subscription_validator_hash: ScriptHash) {
 
   else(_) {
     fail
-  }
-}
-
-/// Check if a list has any elements
-fn has_any(items: List<a>) -> Bool {
-  when items is {
-    [] -> False
-    _ -> True
   }
 }
 

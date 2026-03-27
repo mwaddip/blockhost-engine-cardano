@@ -16,6 +16,7 @@ import { Constr, Data, fromText } from "cmttk";
 import { buildAndSubmitScriptTx } from "cmttk";
 import * as fs from "fs";
 import * as yaml from "js-yaml";
+import { CONFIG_DIR, STATE_DIR, MIN_ADA_FOR_TOKEN_OUTPUT } from "../../paths.js";
 
 // ── Datum encoding ───────────────────────────────────────────────────────────
 
@@ -55,16 +56,41 @@ function encodePlanDatum(
 // ── Auto-increment plan ID ───────────────────────────────────────────────────
 
 function getNextPlanId(): number {
-  const STATE_DIR = process.env["BLOCKHOST_STATE_DIR"] ?? "/var/lib/blockhost";
   const counterPath = `${STATE_DIR}/next-plan-id`;
-  let current = 1;
+  const lockPath = counterPath + ".lock";
+  fs.mkdirSync(STATE_DIR, { recursive: true });
+
+  let lockFd = -1;
+  for (let i = 0; i < 50; i++) {
+    try {
+      lockFd = fs.openSync(lockPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY);
+      break;
+    } catch {
+      if (i === 49) {
+        try { fs.unlinkSync(lockPath); } catch {}
+        try {
+          lockFd = fs.openSync(lockPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY);
+        } catch { /* give up */ }
+        break;
+      }
+      const deadline = Date.now() + 100;
+      while (Date.now() < deadline) {}
+    }
+  }
+
   try {
-    const raw = fs.readFileSync(counterPath, "utf8").trim();
-    const parsed = parseInt(raw, 10);
-    if (!isNaN(parsed) && parsed > 0) current = parsed;
-  } catch { /* file doesn't exist — start at 1 */ }
-  fs.writeFileSync(counterPath, String(current + 1), "utf8");
-  return current;
+    let current = 1;
+    try {
+      const raw = fs.readFileSync(counterPath, "utf8").trim();
+      const parsed = parseInt(raw, 10);
+      if (!isNaN(parsed) && parsed > 0) current = parsed;
+    } catch { /* file doesn't exist — start at 1 */ }
+    fs.writeFileSync(counterPath, String(current + 1), "utf8");
+    return current;
+  } finally {
+    if (lockFd >= 0) try { fs.closeSync(lockFd); } catch {}
+    try { fs.unlinkSync(lockPath); } catch {}
+  }
 }
 
 // ── CLI handler ──────────────────────────────────────────────────────────────
@@ -163,7 +189,6 @@ async function planCreateCommand(
 
   // Read the subscription validator address from config — plans are stored there
   // so the signup page can find them
-  const CONFIG_DIR = process.env["BLOCKHOST_CONFIG_DIR"] ?? "/etc/blockhost";
   let planAddress = wallet.address; // fallback to deployer address
   try {
     const w3 = yaml.load(fs.readFileSync(`${CONFIG_DIR}/web3-defaults.yaml`, "utf8")) as Record<string, Record<string, string>>;
@@ -178,7 +203,7 @@ async function planCreateCommand(
     scriptInputs: [],
     outputs: [{
       address: planAddress,
-      assets: { lovelace: 2_000_000n },
+      assets: { lovelace: MIN_ADA_FOR_TOKEN_OUTPUT },
       datumCbor,
     }],
     signingKey: new Uint8Array([...wallet.paymentKey]),

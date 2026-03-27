@@ -15,6 +15,7 @@ import { deriveWallet } from "cmttk";
 import { buildAndSubmitTransfer } from "cmttk";
 import type { Assets } from "cmttk";
 import * as fs from "fs";
+import { MIN_ADA_FOR_TOKEN_OUTPUT } from "../../paths.js";
 
 /**
  * Core send operation — used by both CLI and fund-manager.
@@ -54,7 +55,7 @@ export async function executeSend(
   } else {
     const unit = asset.policyId + asset.assetName;
     const amount = BigInt(amountStr);
-    assets = { lovelace: 2_000_000n, [unit]: amount };
+    assets = { lovelace: MIN_ADA_FOR_TOKEN_OUTPUT, [unit]: amount };
   }
 
   const txHash = await buildAndSubmitTransfer({

@@ -7,7 +7,7 @@
 import { loadAddressbook } from "../../bw/cli-utils.js";
 import { addressbookSave } from "../../root-agent/client.js";
 import { isValidAddress } from "cmttk";
-import { IMMUTABLE_ROLES } from "../index.js";
+import { assertMutableRole } from "../index.js";
 
 export async function addCommand(args: string[]): Promise<void> {
   if (args.length !== 2) {
@@ -28,12 +28,7 @@ export async function addCommand(args: string[]): Promise<void> {
     process.exit(1);
   }
 
-  if (IMMUTABLE_ROLES.has(name)) {
-    console.error(
-      `Error: '${name}' is a reserved system role and cannot be modified.`,
-    );
-    process.exit(1);
-  }
+  assertMutableRole(name);
 
   if (!isValidAddress(rawAddress)) {
     console.error(

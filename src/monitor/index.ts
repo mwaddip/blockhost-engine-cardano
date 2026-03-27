@@ -35,8 +35,8 @@ import {
 // ── Testing mode ──────────────────────────────────────────────────────────────
 
 import * as fs from "fs";
+import { TESTING_MODE_FILE } from "../paths.js";
 
-const TESTING_MODE_FILE = "/etc/blockhost/.testing-mode";
 const testingMode = fs.existsSync(TESTING_MODE_FILE);
 
 // ── Intervals ─────────────────────────────────────────────────────────────────
@@ -81,7 +81,9 @@ async function poll(
 ): Promise<void> {
   while (running) {
     try {
+      console.log("[MONITOR] Scanning...");
       const diff: ScanDiff = await scanBeacons(provider, beaconPolicyId, koiosUrl || undefined, network as any);
+      console.log(`[MONITOR] Scan result: created=${diff.created.length} removed=${diff.removed.length} extended=${diff.extended.length}`);
 
       // Process new subscriptions
       for (const sub of diff.created) {

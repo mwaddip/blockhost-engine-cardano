@@ -29,10 +29,10 @@ import {
 } from "./distribution.js";
 
 import * as fs from "fs";
+import { TESTING_MODE_FILE } from "../paths.js";
 
 let fundCycleInProgress = false;
 
-const TESTING_MODE_FILE = "/etc/blockhost/.testing-mode";
 const testingMode = fs.existsSync(TESTING_MODE_FILE);
 
 // ── Scheduling helpers ────────────────────────────────────────────────────────

@@ -29,9 +29,7 @@ import {
 } from "cmttk";
 import type { Utxo, ScriptInput, TxOutput, MintEntry, Assets } from "cmttk";
 import * as fs from "fs";
-
-const CONFIG_DIR = process.env["BLOCKHOST_CONFIG_DIR"] ?? "/etc/blockhost";
-const PLUTUS_JSON_PATH = `${CONFIG_DIR}/plutus.json`;
+import { PLUTUS_JSON_PATH } from "../../paths.js";
 const MAX_BATCH = 15; // max UTXOs per transaction to stay within limits
 
 // ── Datum codec ──────────────────────────────────────────────────────────────
@@ -83,6 +81,7 @@ function encodeSubscriptionDatum(datum: SubscriptionDatum): string {
     new Constr(0, [datum.paymentAsset.policyId, datum.paymentAsset.assetName]),
     datum.beaconId,
     datum.userEncrypted,
+    datum.creationHeight,
   ]);
   return Data.to(d);
 }
@@ -293,10 +292,16 @@ export async function executeWithdraw(
 
     const continuingAssets: Assets = { lovelace: 0n };
 
-    // Copy beacon tokens from input
+    // Copy beacon tokens from input (burn them for fully consumed subscriptions)
     for (const [unit, qty] of Object.entries(info.utxo.tokens)) {
       if (unit.startsWith(web3.beaconPolicyId)) {
-        continuingAssets[unit] = qty;
+        if (info.fullyConsumed) {
+          const assetName = unit.slice(web3.beaconPolicyId.length);
+          beaconBurns[assetName] = -1n;
+          hasBeaconBurns = true;
+        } else {
+          continuingAssets[unit] = qty;
+        }
       }
     }
 

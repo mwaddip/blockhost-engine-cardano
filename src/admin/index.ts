@@ -137,7 +137,7 @@ export async function dispatchCommand(
   }
 
   console.log(`[ADMIN] Dispatching action '${cmdDef.action}' for command '${cmd.command}'`);
-  return handler(cmdDef.params, cmdDef.params, txHash);
+  return handler(cmdDef.params, cmdDef.config ?? cmdDef.params, txHash);
 }
 
 // ── Metadata normalization ────────────────────────────────────────────────────

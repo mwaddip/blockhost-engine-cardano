@@ -9,9 +9,8 @@ import * as fs from "fs";
 import * as yaml from "js-yaml";
 import type { AdminConfig, CommandDatabase } from "./types.js";
 import { isValidAddress } from "cmttk";
+import { BLOCKHOST_CONFIG_PATH, CONFIG_DIR } from "../paths.js";
 
-const CONFIG_DIR = process.env["BLOCKHOST_CONFIG_DIR"] ?? "/etc/blockhost";
-const BLOCKHOST_CONFIG_FILE = `${CONFIG_DIR}/blockhost.yaml`;
 const ADMIN_COMMANDS_FILE = `${CONFIG_DIR}/admin-commands.json`;
 
 const HEX32_RE = /^[0-9a-fA-F]{64}$/;
@@ -22,12 +21,12 @@ const HEX32_RE = /^[0-9a-fA-F]{64}$/;
  */
 export function loadAdminConfig(): AdminConfig | null {
   try {
-    if (!fs.existsSync(BLOCKHOST_CONFIG_FILE)) {
+    if (!fs.existsSync(BLOCKHOST_CONFIG_PATH)) {
       return null;
     }
 
     const config = yaml.load(
-      fs.readFileSync(BLOCKHOST_CONFIG_FILE, "utf8"),
+      fs.readFileSync(BLOCKHOST_CONFIG_PATH, "utf8"),
     ) as Record<string, unknown>;
     const admin = config.admin as Record<string, unknown> | undefined;
 

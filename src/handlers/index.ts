@@ -20,12 +20,11 @@ import * as fs from "node:fs";
 import type { TrackedSubscription } from "../monitor/scanner.js";
 import { eciesDecrypt, symmetricEncrypt, loadServerPrivateKey } from "../crypto.js";
 import { getCommand } from "../provisioner.js";
+import { STATE_DIR, VMS_JSON_PATH, PYTHON_TIMEOUT_MS } from "../paths.js";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-
-const WORKING_DIR = "/var/lib/blockhost";
 const SSH_PORT = 22;
-const NEXT_VM_ID_FILE = "/var/lib/blockhost/next-vm-id";
+const NEXT_VM_ID_FILE = `${STATE_DIR}/next-vm-id`;
 
 // ── VM ID counter ─────────────────────────────────────────────────────────────
 
@@ -35,26 +34,45 @@ const NEXT_VM_ID_FILE = "/var/lib/blockhost/next-vm-id";
  * File contains a plain decimal integer (no trailing newline required).
  */
 function allocateVmId(): number {
-  let current = 1;
-  try {
-    const raw = fs.readFileSync(NEXT_VM_ID_FILE, "utf8").trim();
-    const parsed = parseInt(raw, 10);
-    if (!isNaN(parsed) && parsed > 0) {
-      current = parsed;
+  fs.mkdirSync(STATE_DIR, { recursive: true });
+  const lockPath = NEXT_VM_ID_FILE + ".lock";
+
+  // Acquire exclusive lock via O_EXCL
+  let lockFd = -1;
+  for (let i = 0; i < 50; i++) {
+    try {
+      lockFd = fs.openSync(lockPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY);
+      break;
+    } catch {
+      if (i === 49) {
+        // Stale lock from crashed process — force acquire
+        try { fs.unlinkSync(lockPath); } catch {}
+        try {
+          lockFd = fs.openSync(lockPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY);
+        } catch { /* give up */ }
+        break;
+      }
+      const deadline = Date.now() + 100;
+      while (Date.now() < deadline) {} // brief spin
     }
-  } catch {
-    // File does not exist — start at 1
   }
 
-  const next = current + 1;
   try {
-    fs.mkdirSync(WORKING_DIR, { recursive: true });
-    fs.writeFileSync(NEXT_VM_ID_FILE, String(next), "utf8");
-  } catch (err) {
-    console.error(`[WARN] Could not persist next-vm-id: ${err}`);
-  }
+    let current = 1;
+    try {
+      const raw = fs.readFileSync(NEXT_VM_ID_FILE, "utf8").trim();
+      const parsed = parseInt(raw, 10);
+      if (!isNaN(parsed) && parsed > 0) current = parsed;
+    } catch {
+      // File does not exist — start at 1
+    }
 
-  return current;
+    fs.writeFileSync(NEXT_VM_ID_FILE, String(current + 1), "utf8");
+    return current;
+  } finally {
+    if (lockFd >= 0) try { fs.closeSync(lockFd); } catch {}
+    try { fs.unlinkSync(lockPath); } catch {}
+  }
 }
 
 /**
@@ -140,7 +158,7 @@ function runCommand(
   args: string[],
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve) => {
-    const proc = spawn(command, args, { cwd: WORKING_DIR });
+    const proc = spawn(command, args, { cwd: STATE_DIR });
     let stdout = "";
     let stderr = "";
     proc.stdout.on("data", (data) => { stdout += data.toString(); });
@@ -197,8 +215,8 @@ db = get_database()
 db.set_nft_minted(os.environ['VM_NAME'], int(os.environ['NFT_TOKEN_ID']))
 `;
   const result = spawnSync("python3", ["-c", script], {
-    cwd: WORKING_DIR,
-    timeout: 10_000,
+    cwd: STATE_DIR,
+    timeout: PYTHON_TIMEOUT_MS,
     env: { ...process.env, VM_NAME: vmName, NFT_TOKEN_ID: String(nftTokenId) },
   });
   if (result.status !== 0) {
@@ -288,10 +306,7 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
 
   // Save beacon name to vms.json so the scanner can skip it on restart
   try {
-    const fs = await import("fs");
-    const dbPath = process.env["BLOCKHOST_STATE_DIR"]
-      ? `${process.env["BLOCKHOST_STATE_DIR"]}/vms.json`
-      : "/var/lib/blockhost/vms.json";
+    const dbPath = VMS_JSON_PATH;
     if (fs.existsSync(dbPath)) {
       const db = JSON.parse(fs.readFileSync(dbPath, "utf8"));
       if (db.vms?.[vmName]) {
@@ -319,10 +334,7 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
   let vmIpv6 = summary.ipv6 ?? "";
   if (!vmIpv6) {
     try {
-      const fs = await import("fs");
-      const dbPath = process.env["BLOCKHOST_STATE_DIR"]
-        ? `${process.env["BLOCKHOST_STATE_DIR"]}/vms.json`
-        : "/var/lib/blockhost/vms.json";
+      const dbPath = VMS_JSON_PATH;
       if (fs.existsSync(dbPath)) {
         const db = JSON.parse(fs.readFileSync(dbPath, "utf8"));
         vmIpv6 = db.vms?.[vmName]?.ipv6_address ?? "";
@@ -396,9 +408,9 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
   for (let attempt = 1; attempt <= 4; attempt++) {
     if (attempt > 1) {
       console.log(`[INFO] Waiting for guest agent (attempt ${attempt}/4)...`);
-      spawnSync("sleep", ["15"]);
+      await new Promise((r) => setTimeout(r, 15_000));
     }
-    const gecosResult = spawnSync(gecosCmd, gecosArgs, { timeout: 30_000, cwd: WORKING_DIR });
+    const gecosResult = spawnSync(gecosCmd, gecosArgs, { timeout: 30_000, cwd: STATE_DIR });
     if (gecosResult.status === 0) {
       console.log(`[OK] GECOS updated for ${vmName}`);
       gecosUpdated = true;
@@ -472,7 +484,7 @@ else:
 `;
 
   const proc = spawn("python3", ["-c", script], {
-    cwd: WORKING_DIR,
+    cwd: STATE_DIR,
     env: {
       ...process.env,
       BEACON_NAME: beaconName,
@@ -556,8 +568,8 @@ else:
 `;
 
   const lookupResult = spawnSync("python3", ["-c", script], {
-    cwd: WORKING_DIR,
-    timeout: 10_000,
+    cwd: STATE_DIR,
+    timeout: PYTHON_TIMEOUT_MS,
     env: { ...process.env, BEACON_NAME: beaconName, SUBSCRIBER: datum.subscriber },
   });
 

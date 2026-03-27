@@ -5,9 +5,7 @@
 import * as fs from "fs";
 import * as yaml from "js-yaml";
 import type { CardanoNetwork } from "../cardano/types.js";
-
-const CONFIG_DIR = process.env["BLOCKHOST_CONFIG_DIR"] ?? "/etc/blockhost";
-const WEB3_DEFAULTS_PATH = `${CONFIG_DIR}/web3-defaults.yaml`;
+import { WEB3_DEFAULTS_PATH } from "../paths.js";
 
 const POLICY_ID_RE = /^[0-9a-fA-F]{56}$/;
 
@@ -78,15 +76,10 @@ export function loadNetworkConfig(): {
   readonly koiosUrl: string;
   readonly network: CardanoNetwork;
 } {
-  if (!fs.existsSync(WEB3_DEFAULTS_PATH)) {
-    throw new Error(`Config not found: ${WEB3_DEFAULTS_PATH}`);
-  }
-
-  const raw = yaml.load(fs.readFileSync(WEB3_DEFAULTS_PATH, "utf8")) as RawYaml;
-  const bc = raw.blockchain;
+  const cfg = loadWeb3Config();
   return {
-    blockfrostProjectId: bc?.blockfrost_project_id ?? "",
-    koiosUrl: bc?.koios_url ?? "",
-    network: parseNetwork(bc?.network),
+    blockfrostProjectId: cfg.blockfrostProjectId,
+    koiosUrl: cfg.koiosUrl,
+    network: cfg.network,
   };
 }

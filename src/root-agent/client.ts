@@ -7,7 +7,7 @@ import * as net from "net";
 const SOCKET_PATH = "/run/blockhost/root-agent.sock";
 const DEFAULT_TIMEOUT = 300_000; // 300s in ms
 
-export class RootAgentError extends Error {
+class RootAgentError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "RootAgentError";

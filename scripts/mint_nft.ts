@@ -31,10 +31,9 @@ import { userTokenAssetName, referenceTokenAssetName } from "../src/nft/mint.js"
 import type { CardanoNetwork } from "../src/cardano/types.js";
 import type { Assets } from "cmttk";
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+import { CONFIG_DIR, STATE_DIR } from "../src/paths.js";
 
-const CONFIG_DIR  = process.env["BLOCKHOST_CONFIG_DIR"] ?? "/etc/blockhost";
-const STATE_DIR   = process.env["BLOCKHOST_STATE_DIR"]  ?? "/var/lib/blockhost";
+// ── Constants ─────────────────────────────────────────────────────────────────
 const KEY_PATH    = `${CONFIG_DIR}/deployer.key`;
 const COUNTER_PATH = `${STATE_DIR}/next-nft-id`;
 
@@ -150,19 +149,41 @@ function loadMnemonic(): string {
 // ── Token ID counter ──────────────────────────────────────────────────────────
 
 function allocateTokenId(): number {
-  if (!fs.existsSync(STATE_DIR)) {
-    fs.mkdirSync(STATE_DIR, { recursive: true });
+  fs.mkdirSync(STATE_DIR, { recursive: true });
+  const lockPath = COUNTER_PATH + ".lock";
+
+  let lockFd = -1;
+  for (let i = 0; i < 50; i++) {
+    try {
+      lockFd = fs.openSync(lockPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY);
+      break;
+    } catch {
+      if (i === 49) {
+        try { fs.unlinkSync(lockPath); } catch {}
+        try {
+          lockFd = fs.openSync(lockPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY);
+        } catch { /* give up */ }
+        break;
+      }
+      const deadline = Date.now() + 100;
+      while (Date.now() < deadline) {}
+    }
   }
 
-  let current = 1;
-  if (fs.existsSync(COUNTER_PATH)) {
-    const raw = fs.readFileSync(COUNTER_PATH, "utf8").trim();
-    const parsed = parseInt(raw, 10);
-    if (!isNaN(parsed) && parsed > 0) current = parsed;
-  }
+  try {
+    let current = 1;
+    try {
+      const raw = fs.readFileSync(COUNTER_PATH, "utf8").trim();
+      const parsed = parseInt(raw, 10);
+      if (!isNaN(parsed) && parsed > 0) current = parsed;
+    } catch {}
 
-  fs.writeFileSync(COUNTER_PATH, String(current + 1), { encoding: "utf8" });
-  return current;
+    fs.writeFileSync(COUNTER_PATH, String(current + 1), { encoding: "utf8" });
+    return current;
+  } finally {
+    if (lockFd >= 0) try { fs.closeSync(lockFd); } catch {}
+    try { fs.unlinkSync(lockPath); } catch {}
+  }
 }
 
 // ── Blueprint loading ──────────────────────────────────────────────────────

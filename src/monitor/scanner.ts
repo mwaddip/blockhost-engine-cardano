@@ -67,7 +67,9 @@ type PlutusValue =
 // ── Testing mode ─────────────────────────────────────────────────────────────
 
 import * as fs from "fs";
-const _testingMode = fs.existsSync("/etc/blockhost/.testing-mode");
+import { TESTING_MODE_FILE, VMS_JSON_PATH } from "../paths.js";
+
+const _testingMode = fs.existsSync(TESTING_MODE_FILE);
 
 // ── Removal confirmation intervals ──────────────────────────────────────────
 //
@@ -105,9 +107,7 @@ function loadKnownBeacons(): void {
   if (_stateLoaded) return;
   _stateLoaded = true;
   try {
-    const dbPath = process.env["BLOCKHOST_STATE_DIR"]
-      ? `${process.env["BLOCKHOST_STATE_DIR"]}/vms.json`
-      : "/var/lib/blockhost/vms.json";
+    const dbPath = VMS_JSON_PATH;
     if (!fs.existsSync(dbPath)) return;
     const db = JSON.parse(fs.readFileSync(dbPath, "utf8"));
     const vms = db.vms ?? {};
@@ -182,11 +182,13 @@ export async function scanBeacons(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ _asset_policy: beaconPolicyId }),
+      signal: AbortSignal.timeout(15_000),
     });
     if (res.ok) {
       holders = (await res.json()) as Array<{ payment_address: string }>;
     }
-  } catch {
+  } catch (err) {
+    console.error(`[SCANNER] policy_asset_addresses query failed: ${err}`);
     return { created: [], removed: [], extended: [] };
   }
 
@@ -230,8 +232,8 @@ export async function scanBeacons(
         );
         if (hasBeacon) utxos.push(bfUtxo);
       }
-    } catch {
-      // Address unavailable — skip
+    } catch (err) {
+      console.warn(`[SCAN] Could not fetch UTXOs for ${addr}: ${err instanceof Error ? err.message : err}`);
     }
   }
 
