@@ -5,7 +5,6 @@ build/
 *.d.ts
 *.js.map
 !engine.json
-!scripts/signup-engine.js
 .env
 *.key
 *.secret
