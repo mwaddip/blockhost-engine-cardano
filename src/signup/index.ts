@@ -25,13 +25,17 @@
 import {
     hexToBytes,
     bytesToHex,
-    cborUint,
-    cborBytes,
-    cborArray,
-    cborMap,
-    cborTag,
-    decodeCbor,
 } from "@mwaddip/cmttk/cbor";
+import {
+    parseCip30Utxos,
+    buildUnsignedScriptTx,
+    mergeCip30Witness,
+    type TxOutput,
+    type MintEntry,
+    type Assets,
+} from "@mwaddip/cmttk/tx";
+import { getProvider } from "@mwaddip/cmttk/provider";
+import type { CardanoNetwork } from "@mwaddip/cmttk";
 import { bech32 } from "bech32";
 import {
     plutusConstr,
@@ -58,69 +62,13 @@ declare global {
     }
 }
 
-// ── Koios REST base URL ─────────────────────────────────────────────
+// ── Koios provider ─────────────────────────────────────────────────
+//
+// cmttk's KoiosProvider handles all chain queries with retry + JSON parsing.
+// We pass `/api/v1` as the base URL so requests go through our local nginx
+// proxy (forwards to https://{network}.koios.rest/api/v1/*), avoiding CORS.
 
-function koiosBase(_network: string): string {
-    // Use relative path — requests go through our local proxy which
-    // forwards to Koios, avoiding CORS issues in the browser.
-    // The proxy server maps /api/v1/* → https://{network}.koios.rest/api/v1/*
-    return '/api/v1';
-}
-
-interface KoiosOpts {
-    method?: string;
-    contentType?: string;
-    rawBody?: Uint8Array;
-}
-
-/**
- * Koios fetch helper (POST with JSON body).
- * No API key needed — Koios is free and public.
- * Includes basic retry logic for 429 (rate limit).
- */
-async function koiosFetch(endpoint: string, body: unknown, opts?: KoiosOpts): Promise<any> {
-    const base = koiosBase(CONFIG.network);
-    opts = opts || {};
-    const method = opts.method || (body != null ? 'POST' : 'GET');
-    const headers: Record<string, string> = {};
-    let fetchBody: BodyInit | undefined;
-
-    if (opts.contentType) {
-        headers['Content-Type'] = opts.contentType;
-        fetchBody = opts.rawBody as BodyInit | undefined;
-    } else if (body != null) {
-        headers['Content-Type'] = 'application/json';
-        fetchBody = JSON.stringify(body);
-    }
-
-    async function doFetch(): Promise<Response> {
-        return fetch(base + endpoint, {
-            method: method,
-            headers: headers,
-            body: fetchBody,
-        });
-    }
-
-    let res = await doFetch();
-
-    // Retry once on 429 (rate limit) after a short delay
-    if (res.status === 429) {
-        await new Promise(function (r) { setTimeout(r, 1500); });
-        res = await doFetch();
-    }
-
-    if (!res.ok) {
-        if (res.status === 404) return null;
-        const errBody = await res.text().catch(function () { return ''; });
-        throw new Error('Koios ' + res.status + ': ' + errBody);
-    }
-
-    // Koios submittx returns plain text (tx hash)
-    if (opts.contentType === 'application/cbor') {
-        return res.text();
-    }
-    return res.json();
-}
+const provider = getProvider(CONFIG.network as CardanoNetwork, undefined, '/api/v1');
 
 // ── ECIES encryption (secp256k1 ECDH + HKDF-SHA256 + AES-GCM) ───────
 // Wire format: ephemeralPub(65) || IV(12) || ciphertext+tag
@@ -373,12 +321,9 @@ async function loadPlans(): Promise<void> {
     }
 
     try {
-        // Query all UTXOs at the validator address via Koios POST /address_utxos
-        // with _extended: true to get inline datum data.
-        const utxos = await koiosFetch('/address_utxos', {
-            _addresses: [CONFIG.validatorAddress],
-            _extended: true,
-        });
+        // Query all UTXOs at the validator address. cmttk's KoiosProvider
+        // uses _extended: true, so inline_datum is present on each entry.
+        const utxos = await provider.fetchUtxos(CONFIG.validatorAddress) as any[];
 
         if (!utxos || !Array.isArray(utxos) || utxos.length === 0) {
             sel.innerHTML = '<option value="">No plans available</option>';
@@ -590,13 +535,6 @@ function detectWallets(): void {
 // Cardano addresses exceed the default bech32 90-char limit (base addresses
 // encode 57 bytes → ~108 chars including HRP). Pass 256 as the LIMIT argument.
 
-/** Decode a bech32 address string to raw bytes, return as hex. */
-function bech32ToHex(bech32Addr: string): string {
-    const decoded = bech32.decode(bech32Addr, 256);
-    const bytes = bech32.fromWords(decoded.words);
-    return bytesToHex(new Uint8Array(bytes));
-}
-
 /** Encode raw address bytes (hex) to bech32 using Cardano HRP derived from header byte. */
 function hexAddressToBech32(hexAddr: string): string {
     try {
@@ -663,527 +601,6 @@ async function connectWallet(name: string): Promise<void> {
 // from a Node-side regression test (scripts/compare-signup-datum.ts) without
 // pulling in DOM.
 
-// ── Transaction building ──────────────────────────────────────────────
-//
-// Builds a Cardano transaction CBOR that the CIP-30 wallet can sign.
-
-interface BuildTxParams {
-    utxos: string[];
-    scriptAddrHex: string;
-    scriptOutputLovelace: bigint;
-    totalPayment: bigint;
-    isAdaPayment: boolean;
-    payPolicyId: string;
-    payAssetName: string;
-    beaconPolicyId: string;
-    beaconName: string;
-    beaconScriptCbor: string;
-    datumCbor: string;
-    protocolParams: any;
-    subscriberKeyHash: string;
-    changeAddrHex: string;
-    getCollateral: () => Promise<string[]>;
-}
-
-interface ParsedUtxo {
-    txHash: string;
-    index: number;
-    lovelace: bigint;
-    tokens: Record<string, bigint>;
-}
-
-/**
- * Build an unsigned subscription transaction CBOR hex.
- */
-async function buildSubscriptionTx(p: BuildTxParams): Promise<{
-    txHex: string;
-    txBody: Uint8Array;
-    redeemersCbor: Uint8Array;
-    plutusV3Scripts: Uint8Array;
-}> {
-    // ── Parse wallet UTXOs from CIP-30 format (CBOR hex) ────────────
-    const parsedUtxos: ParsedUtxo[] = [];
-    for (let i = 0; i < p.utxos.length; i++) {
-        const parsed = parseCip30Utxo(p.utxos[i]!);
-        if (parsed) parsedUtxos.push(parsed);
-    }
-
-    if (parsedUtxos.length === 0) {
-        throw new Error('No usable UTXOs in wallet');
-    }
-
-    // ── Get current slot for validity range ─────────────────────────
-    const tipArr = await koiosFetch('/tip', null);
-    if (!tipArr || !Array.isArray(tipArr) || tipArr.length === 0) throw new Error('Failed to fetch chain tip');
-    const tipData = tipArr[0];
-    const currentSlot = tipData.abs_slot || 0;
-
-    // Validity range: valid from (current slot - 60) to (current slot + 900)
-    // This gives a 15-minute window for submission
-    let validFrom = currentSlot - 60;
-    const validTo = currentSlot + 900;
-    if (validFrom < 0) validFrom = 0;
-
-    // ── Coin selection ──────────────────────────────────────────────
-    // For ADA payment: we need scriptOutputLovelace + fee + deployer fee + minUtxo for change
-    // For token payment: we need minUtxo for script + token amount + fee + deployer fee
-    const estimatedFee = 1000000n; // 1 ADA — generous for Plutus script tx
-    const deployerFeeLovelace = CONFIG.deployerAddress ? 2500000n : 0n; // 2.5 ADA for NFT minting costs
-    const requiredLovelace = p.scriptOutputLovelace + estimatedFee + deployerFeeLovelace;
-
-    // Sort UTXOs by lovelace descending for greedy selection
-    parsedUtxos.sort(function (a, b) {
-        if (a.lovelace > b.lovelace) return -1;
-        if (a.lovelace < b.lovelace) return 1;
-        return 0;
-    });
-
-    const selectedUtxos: ParsedUtxo[] = [];
-    let totalInputLovelace = 0n;
-    const totalInputTokens: Record<string, bigint> = {};
-
-    for (let i = 0; i < parsedUtxos.length; i++) {
-        selectedUtxos.push(parsedUtxos[i]!);
-        totalInputLovelace += parsedUtxos[i]!.lovelace;
-        // Track native tokens
-        if (parsedUtxos[i]!.tokens) {
-            for (const unit in parsedUtxos[i]!.tokens) {
-                totalInputTokens[unit] = (totalInputTokens[unit] || 0n) + parsedUtxos[i]!.tokens[unit]!;
-            }
-        }
-        if (totalInputLovelace >= requiredLovelace) {
-            // For token payment, also ensure we have enough tokens
-            if (!p.isAdaPayment) {
-                const tokenUnit = p.payPolicyId + p.payAssetName;
-                if ((totalInputTokens[tokenUnit] || 0n) < p.totalPayment) continue;
-            }
-            break;
-        }
-    }
-
-    if (totalInputLovelace < requiredLovelace) {
-        throw new Error(
-            'Insufficient ADA. Need ' + (requiredLovelace / 1000000n).toString() +
-            ' ADA, have ' + (totalInputLovelace / 1000000n).toString() + ' ADA'
-        );
-    }
-
-    if (!p.isAdaPayment) {
-        const tokenUnit = p.payPolicyId + p.payAssetName;
-        if ((totalInputTokens[tokenUnit] || 0n) < p.totalPayment) {
-            throw new Error('Insufficient tokens for payment');
-        }
-    }
-
-    // ── Build transaction body fields ───────────────────────────────
-
-    // Field 0: inputs (set of [txHash, index])
-    const inputsCbor = buildInputsCbor(selectedUtxos);
-
-    // Field 1: outputs
-    // Output 0: script output (validator address + beacon + datum)
-    // Output 1: change output (back to subscriber)
-    const scriptOutputCbor = buildScriptOutput(p);
-    let changeLovelace = totalInputLovelace - p.scriptOutputLovelace - estimatedFee;
-
-    // Build change output — return unused tokens too
-    const changeTokens: Record<string, bigint> = {};
-    for (const unit in totalInputTokens) {
-        changeTokens[unit] = totalInputTokens[unit]!;
-    }
-    // Subtract any tokens sent to the script output
-    if (!p.isAdaPayment) {
-        const tokenUnit = p.payPolicyId + p.payAssetName;
-        changeTokens[tokenUnit] = (changeTokens[tokenUnit] || 0n) - p.totalPayment;
-        if (changeTokens[tokenUnit]! <= 0n) delete changeTokens[tokenUnit];
-    }
-
-    changeLovelace -= deployerFeeLovelace;
-
-    const changeOutputCbor = buildChangeOutput(p.changeAddrHex, changeLovelace, changeTokens);
-
-    // Build outputs array: script output, deployer fee (if configured), change
-    const outputsList: Uint8Array[] = [scriptOutputCbor];
-    if (CONFIG.deployerAddress && deployerFeeLovelace > 0n) {
-        const deployerAddrHex = bech32ToHex(CONFIG.deployerAddress);
-        const deployerOutputCbor = buildChangeOutput(deployerAddrHex, deployerFeeLovelace, {});
-        outputsList.push(deployerOutputCbor);
-    }
-    outputsList.push(changeOutputCbor);
-    const outputsCbor = cborArray(outputsList);
-
-    // Field 2: fee
-    const feeCbor = cborUint(estimatedFee);
-
-    // Field 3: TTL (validTo)
-    const ttlCbor = cborUint(validTo);
-
-    // Field 8: validity interval start (validFrom)
-    // Field 9: mint
-    const mintCbor = buildMintCbor(p.beaconPolicyId, p.beaconName, 1n);
-
-    // Field 11: script_data_hash — computed from redeemers + datums + cost models
-    // We will compute this after building the witness set
-
-    // Field 14: required signers (subscriber key hash for minting policy)
-    const requiredSignersCbor = cborArray([cborBytes(p.subscriberKeyHash)]);
-
-    // ── Build transaction body as CBOR map ──────────────────────────
-    // Transaction body is a map with integer keys
-    // Collateral: use the wallet's reserved collateral UTXO (CIP-30 getCollateral)
-    const collateralUtxos = await p.getCollateral();
-    if (!collateralUtxos || collateralUtxos.length === 0) {
-        throw new Error('No collateral set in wallet. Please configure collateral in your wallet settings (typically 5 ADA).');
-    }
-    console.log('getCollateral returned', collateralUtxos.length, 'UTXOs');
-    console.log('Collateral[0] hex length:', collateralUtxos[0]!.length, 'first 80:', collateralUtxos[0]!.slice(0, 80));
-    const collateralParsed = parseCip30Utxo(collateralUtxos[0]!);
-    if (!collateralParsed) throw new Error('Could not parse collateral UTXO');
-    console.log('Collateral parsed txHash:', collateralParsed.txHash, '(len:', collateralParsed.txHash.length + ') #' + collateralParsed.index, 'lovelace:', collateralParsed.lovelace.toString());
-
-    // Verify collateral txHash is 64 hex chars (32 bytes)
-    if (collateralParsed.txHash.length !== 64) {
-        console.error('COLLATERAL TXHASH WRONG LENGTH:', collateralParsed.txHash.length, 'expected 64');
-    }
-    console.log('Spending inputs:', selectedUtxos.map(function(u) { return u.txHash + '#' + u.index + '(len:' + u.txHash.length + ')'; }));
-    // Verify collateral is not in spending inputs
-    const colKey = collateralParsed.txHash + '#' + collateralParsed.index;
-    const spendKeys = selectedUtxos.map(function(u) { return u.txHash + '#' + u.index; });
-    if (spendKeys.indexOf(colKey) !== -1) {
-        console.warn('WARNING: collateral UTXO is also a spending input!');
-    }
-
-    // key 13 = collateral inputs
-    const collateralInputsCbor = cborTag(258, cborArray([
-        cborArray([cborBytes(collateralParsed.txHash), cborUint(collateralParsed.index)]),
-    ]));
-    // key 17 = total collateral = how much the node can seize if script fails
-    // Must equal: collateral_input_value - collateral_return_value
-    // Typical: 150% of fee. With 1 ADA fee → 1.5 ADA collateral.
-    let totalCollateral = estimatedFee + estimatedFee / 2n; // 150% of fee
-    if (totalCollateral > collateralParsed.lovelace) totalCollateral = collateralParsed.lovelace;
-
-    // key 16 = collateral return (remainder back to subscriber)
-    const collateralReturnValue = collateralParsed.lovelace - totalCollateral;
-    const collateralReturnCbor = cborMap([
-        [cborUint(0), cborBytes(hexToBytes(p.changeAddrHex))],
-        [cborUint(1), cborUint(collateralReturnValue)],
-    ]);
-
-    const bodyEntries: [Uint8Array, Uint8Array][] = [
-        [cborUint(0), inputsCbor],      // inputs
-        [cborUint(1), outputsCbor],      // outputs
-        [cborUint(2), feeCbor],          // fee
-        [cborUint(3), ttlCbor],          // ttl
-        [cborUint(8), cborUint(validFrom)],  // validity interval start
-        [cborUint(9), mintCbor],         // mint
-        [cborUint(13), collateralInputsCbor], // collateral inputs
-        [cborUint(14), requiredSignersCbor],  // required signers
-        [cborUint(16), collateralReturnCbor], // collateral return
-        [cborUint(17), cborUint(totalCollateral)], // total collateral
-    ];
-    let txBody = cborMap(bodyEntries);
-
-    // ── Build witness set ───────────────────────────────────────────
-    // The witness set needs:
-    //   - field 3: plutus_v3_scripts (for the beacon minting policy)
-    //   - field 5: redeemers (for the minting action)
-    //
-    // The wallet will add vkey witnesses via signTx.
-    // Script data hash (field 11 in body) = hash of (redeemers, datums, cost_models)
-
-    // Redeemer for the mint: CreateSubscription = Constr(0, [])
-    // Redeemers: array of [tag, index, data, ex_units]
-    // tag 0 = spend, tag 1 = mint, tag 2 = cert, tag 3 = reward
-    // Execution units for CreateSubscription on our beacon validator.
-    // Evaluated by Lucid — constant for this script regardless of tx context.
-    // Only changes on protocol hard forks (cost model updates).
-    const EX_UNITS_MEM = 50317n;
-    const EX_UNITS_STEPS = 15491760n;
-
-    const redeemerData = plutusConstr(0, []);  // CreateSubscription = Constr(0, [])
-    const redeemerCbor = cborArray([
-        cborUint(1),          // tag: mint
-        cborUint(0),          // index
-        redeemerData,         // redeemer data
-        cborArray([           // ex_units [mem, steps]
-            cborUint(EX_UNITS_MEM),
-            cborUint(EX_UNITS_STEPS),
-        ]),
-    ]);
-    const redeemersCbor = cborArray([redeemerCbor]);
-
-    // Decode the beacon script from hex CBOR (it's a double-encoded CBOR script)
-    const beaconScriptBytes = hexToBytes(p.beaconScriptCbor);
-
-    // Plutus V3 scripts in the witness set
-    const plutusV3Scripts = cborArray([cborBytes(beaconScriptBytes)]);
-
-    // Script data hash — precomputed for our beacon CreateSubscription redeemer.
-    // Computed via Lucid with evaluated ex_units [50317, 15491760].
-    // This hash is constant for all subscription transactions because:
-    //   - Redeemer is always Constr(0, []) with the same ex_units
-    //   - Datums in witness set are always empty (we use inline datums)
-    //   - Cost model only changes on protocol hard forks
-    // Recompute after hard forks by running: buildSubscriptionTx via Lucid
-    const SCRIPT_DATA_HASH = '0fe49daf8971d9bc438ae1f3210f55c55460021c545b9dfdbe815b6f90453ed6';
-
-    // Build witness set as CBOR map
-    const witnessEntries: [Uint8Array, Uint8Array][] = [
-        [cborUint(7), plutusV3Scripts], // field 7: plutus_v3_scripts
-        [cborUint(5), redeemersCbor],   // field 5: redeemers
-    ];
-    const witnessSet = cborMap(witnessEntries);
-
-    // Add script_data_hash to body (field 11)
-    bodyEntries.push([cborUint(11), cborBytes(SCRIPT_DATA_HASH)]);
-    txBody = cborMap(bodyEntries);
-
-    // ── Assemble full transaction ───────────────────────────────────
-    // Transaction = [body, witness_set, is_valid, auxiliary_data]
-    const txCbor = cborArray([
-        txBody,
-        witnessSet,
-        new Uint8Array([0xF5]),     // true (is_valid)
-        new Uint8Array([0xF6]),     // null (no auxiliary data)
-    ]);
-
-    return {
-        txHex: bytesToHex(txCbor),
-        txBody: txBody,
-        redeemersCbor: redeemersCbor,
-        plutusV3Scripts: plutusV3Scripts,
-    };
-}
-
-/**
- * Parse a CIP-30 UTXO (CBOR hex of a transaction output).
- * CIP-30 getUtxos() returns an array of CBOR-encoded [input, output] pairs.
- */
-function parseCip30Utxo(cborHex: string): ParsedUtxo | null {
-    try {
-        const bytes = hexToBytes(cborHex);
-        const decoded = decodeCbor(bytes, 0);
-        const pair = decoded.value as any;
-
-        if (!Array.isArray(pair) || pair.length < 2) return null;
-
-        // pair[0] = input = [txHash (bytes), index (uint)]
-        const input = pair[0];
-        if (!Array.isArray(input) || input.length < 2) return null;
-
-        let txHash = input[0]; // Uint8Array or hex
-        const index = input[1];
-        if (txHash instanceof Uint8Array) txHash = bytesToHex(txHash);
-
-        // pair[1] = output = [address, value, ...] or map
-        const output = pair[1];
-        let lovelace = 0n;
-        let tokens: Record<string, bigint> = {};
-
-        if (Array.isArray(output)) {
-            // Pre-Babbage: [address, value, optional_datum_hash]
-            const value = output[1];
-            if (typeof value === 'bigint' || typeof value === 'number') {
-                lovelace = BigInt(value);
-            } else if (Array.isArray(value)) {
-                // [lovelace, multiasset_map]
-                lovelace = BigInt(value[0]);
-                if (value[1] && typeof value[1] === 'object') {
-                    tokens = parseMultiAsset(value[1]);
-                }
-            }
-        } else if (output && typeof output === 'object' && !(output instanceof Uint8Array)) {
-            // Post-Babbage: map { 0: address, 1: value, ... }
-            const value = (output as any)[1] || (output as Map<any, any>).get?.(1);
-            if (typeof value === 'bigint' || typeof value === 'number') {
-                lovelace = BigInt(value);
-            } else if (Array.isArray(value)) {
-                lovelace = BigInt(value[0]);
-                if (value[1] && typeof value[1] === 'object') {
-                    tokens = parseMultiAsset(value[1]);
-                }
-            }
-        }
-
-        return {
-            txHash: txHash,
-            index: Number(index),
-            lovelace: lovelace,
-            tokens: tokens,
-        };
-    } catch (e) {
-        console.warn('parseCip30Utxo error:', e);
-        return null;
-    }
-}
-
-/**
- * Parse a CBOR multiasset map into { "policyId+assetName": bigint }.
- * The multiasset structure is: Map<PolicyId, Map<AssetName, Quantity>>
- */
-function parseMultiAsset(multiasset: any): Record<string, bigint> {
-    const tokens: Record<string, bigint> = {};
-    if (multiasset instanceof Map) {
-        multiasset.forEach(function (assets: any, policyId: any) {
-            const pid = policyId instanceof Uint8Array ? bytesToHex(policyId) : String(policyId);
-            if (assets instanceof Map) {
-                assets.forEach(function (qty: any, assetName: any) {
-                    const aname = assetName instanceof Uint8Array ? bytesToHex(assetName) : String(assetName);
-                    tokens[pid + aname] = BigInt(qty);
-                });
-            }
-        });
-    }
-    return tokens;
-}
-
-/**
- * Build CBOR for transaction inputs.
- * Inputs are encoded as a set (CBOR array) of [txHash(bytes32), index(uint)].
- * Inputs MUST be sorted lexicographically by (txHash, index) per Conway.
- */
-function buildInputsCbor(utxos: ParsedUtxo[]): Uint8Array {
-    // Sort by txHash then index
-    const sorted = utxos.slice().sort(function (a, b) {
-        if (a.txHash < b.txHash) return -1;
-        if (a.txHash > b.txHash) return 1;
-        return a.index - b.index;
-    });
-
-    const items: Uint8Array[] = [];
-    for (let i = 0; i < sorted.length; i++) {
-        items.push(cborArray([
-            cborBytes(sorted[i]!.txHash),
-            cborUint(sorted[i]!.index),
-        ]));
-    }
-    // Use tag 258 for set semantics (required for Conway era inputs)
-    return cborTag(258, cborArray(items));
-}
-
-/**
- * Build the script output CBOR (post-Babbage format).
- */
-function buildScriptOutput(p: BuildTxParams): Uint8Array {
-    // Address as raw bytes
-    const addrBytes = hexToBytes(p.scriptAddrHex);
-
-    // Value: for ADA-only, just lovelace uint.
-    // For ADA + tokens, [lovelace, { policyId: { assetName: qty } }]
-    let valueCbor: Uint8Array;
-    const beaconAssetMap = cborMap([
-        [cborBytes(p.beaconName), cborUint(1n)],
-    ]);
-    const beaconPolicyMap = cborMap([
-        [cborBytes(p.beaconPolicyId), beaconAssetMap],
-    ]);
-
-    if (p.isAdaPayment) {
-        // ADA payment: value = [lovelace, { beaconPolicy: { beaconName: 1 } }]
-        valueCbor = cborArray([cborUint(p.scriptOutputLovelace), beaconPolicyMap]);
-    } else {
-        // Token payment: value = [lovelace, { beaconPolicy: { beaconName: 1 }, payPolicy: { payAsset: amount } }]
-        const payAssetMap = cborMap([
-            [cborBytes(p.payAssetName), cborUint(p.totalPayment)],
-        ]);
-        const multiAsset = cborMap([
-            [cborBytes(p.beaconPolicyId), beaconAssetMap],
-            [cborBytes(p.payPolicyId), payAssetMap],
-        ]);
-        valueCbor = cborArray([cborUint(p.scriptOutputLovelace), multiAsset]);
-    }
-
-    // Inline datum: [1, tag(24, encoded_datum)]
-    // The datum CBOR is wrapped in tag 24 (CBOR-in-CBOR) as a bstr
-    const datumBytes = hexToBytes(p.datumCbor);
-    const datumOption = cborArray([
-        cborUint(1),
-        cborTag(24, cborBytes(datumBytes)),
-    ]);
-
-    // Build output as map
-    return cborMap([
-        [cborUint(0), cborBytes(addrBytes)],
-        [cborUint(1), valueCbor],
-        [cborUint(2), datumOption],
-    ]);
-}
-
-/**
- * Build a change output for the subscriber's wallet.
- */
-function buildChangeOutput(addrHex: string, lovelace: bigint, tokens: Record<string, bigint>): Uint8Array {
-    const addrBytes = hexToBytes(addrHex);
-
-    // Check if there are any tokens to return
-    let hasTokens = false;
-    for (const unit in tokens) {
-        if (tokens[unit]! > 0n) { hasTokens = true; break; }
-    }
-
-    let valueCbor: Uint8Array;
-    if (!hasTokens) {
-        valueCbor = cborUint(lovelace);
-    } else {
-        // Group tokens by policy
-        const policies: Record<string, Array<[string, bigint]>> = {};
-        for (const unit in tokens) {
-            if (tokens[unit]! <= 0n) continue;
-            const pid = unit.slice(0, 56);
-            const aname = unit.slice(56);
-            if (!policies[pid]) policies[pid] = [];
-            policies[pid]!.push([aname, tokens[unit]!]);
-        }
-
-        const policyEntries: [Uint8Array, Uint8Array][] = [];
-        for (const pid in policies) {
-            const assetEntries: [Uint8Array, Uint8Array][] = [];
-            for (let j = 0; j < policies[pid]!.length; j++) {
-                assetEntries.push([
-                    cborBytes(policies[pid]![j]![0]),
-                    cborUint(policies[pid]![j]![1]),
-                ]);
-            }
-            policyEntries.push([cborBytes(pid), cborMap(assetEntries)]);
-        }
-
-        valueCbor = cborArray([cborUint(lovelace), cborMap(policyEntries)]);
-    }
-
-    return cborMap([
-        [cborUint(0), cborBytes(addrBytes)],
-        [cborUint(1), valueCbor],
-    ]);
-}
-
-/**
- * Build mint field CBOR: { policyId: { assetName: quantity } }
- */
-function buildMintCbor(policyId: string, assetName: string, quantity: bigint): Uint8Array {
-    return cborMap([
-        [cborBytes(policyId), cborMap([
-            [cborBytes(assetName), cborUint(quantity)],
-        ])],
-    ]);
-}
-
-/**
- * Submit a signed transaction via Koios REST API.
- * POST /submittx with Content-Type: application/cbor and raw CBOR bytes.
- */
-async function submitViaKoios(signedTxHex: string): Promise<string> {
-    const txBytes = hexToBytes(signedTxHex);
-
-    const result: string = await koiosFetch('/submittx', null, {
-        method: 'POST',
-        contentType: 'application/cbor',
-        rawBody: txBytes,
-    });
-
-    // Koios returns the hash as plain text (may have quotes)
-    return result.replace(/"/g, '').trim();
-}
 
 // ── Step 3: Subscribe ─────────────────────────────────────────────────
 
@@ -1242,11 +659,8 @@ document.getElementById('btn-subscribe')!.addEventListener('click', async functi
 
         // C.2  Get current block height for beacon uniqueness salt
         await ensureEcies(); // ensure _sha256 is loaded
-        const tipArr0 = await koiosFetch('/tip', null);
-        let creationHeight = 0;
-        if (tipArr0 && Array.isArray(tipArr0) && tipArr0.length > 0) {
-            creationHeight = tipArr0[0].block_no || 0;
-        }
+        const tip = await provider.fetchTip();
+        const creationHeight = tip.block;
 
         // C.2b Compute beacon token name: sha256(plan_id_4BE ++ subscriber_key_hash ++ creation_height_4BE)
         const planIdBytes = new Uint8Array(4);
@@ -1333,97 +747,84 @@ document.getElementById('btn-subscribe')!.addEventListener('click', async functi
 
         console.log('scriptAddrHex:', scriptAddrHex);
 
-        // C.7  Fetch UTXOs for coin selection and protocol parameters
-        showStatus('subscribe-status', '<span class="spinner"></span>Fetching UTXOs and protocol parameters...', 'info');
+        // C.7  Parse CIP-30 wallet UTXOs / collateral and build the tx via cmttk.
+        //      Protocol params, fee, min-UTXO, and script_data_hash are all
+        //      computed by cmttk from live chain state — no hardcoded values.
+        showStatus('subscribe-status', '<span class="spinner"></span>Fetching wallet UTXOs...', 'info');
 
         const utxosRaw = await api.getUtxos();
         if (!utxosRaw || utxosRaw.length === 0) {
             throw new Error('No UTXOs in wallet — fund your wallet first');
         }
+        const walletUtxos = parseCip30Utxos(utxosRaw);
 
-        const ppArr = await koiosFetch('/epoch_params?limit=1', null);
-        if (!ppArr || !Array.isArray(ppArr) || ppArr.length === 0) throw new Error('Failed to fetch protocol parameters');
-        const protocolParams = ppArr[0];
+        const collateralRaw = await api.getCollateral();
+        if (!collateralRaw || collateralRaw.length === 0) {
+            throw new Error('No collateral set in wallet. Please configure collateral in your wallet settings (typically 5 ADA).');
+        }
+        const collateralUtxos = parseCip30Utxos(collateralRaw);
 
-        // C.8  Compute min-UTXO lovelace for the script output
-        //      Subscription datums can be large (encrypted keys, beacon ID, etc.)
-        //      5 ADA covers outputs up to ~1KB datum. The node rejects if too low.
-        const minUtxoLovelace = 5000000n;
+        // C.8  Compose script output assets. For ADA payment, lock totalPayment
+        //      as lovelace — cmttk bumps to min-UTXO if needed but this already
+        //      covers it. For token payment, the token is carried alongside and
+        //      cmttk computes lovelace from protocol params.
+        const beaconUnit = CONFIG.beaconPolicyId + beaconName;
+        const scriptAssets: Assets = isAdaPayment
+            ? { lovelace: totalPayment + 5_000_000n, [beaconUnit]: 1n }
+            : { lovelace: 0n, [beaconUnit]: 1n, [payPolicyId + payAssetName]: totalPayment };
 
-        // C.9  Compute required lovelace for the script output
-        let scriptOutputLovelace: bigint;
-        if (isAdaPayment) {
-            // For ADA payment, lock totalPayment + minUtxo overhead
-            scriptOutputLovelace = totalPayment + minUtxoLovelace;
-        } else {
-            // For token payment, just need min ADA + the token is carried alongside
-            scriptOutputLovelace = minUtxoLovelace;
+        const outputs: TxOutput[] = [{
+            address: hexAddressToBech32(scriptAddrHex),
+            assets: scriptAssets,
+            datumCbor: datumCbor,
+        }];
+
+        if (CONFIG.deployerAddress) {
+            outputs.push({
+                address: CONFIG.deployerAddress,      // already bech32 in CONFIG
+                assets: { lovelace: 2_500_000n },
+            });
         }
 
-        // C.10 Build the transaction using the wallet's coin selection.
+        // C.9  Mint one beacon token. The minting policy's CreateSubscription
+        //      redeemer is Constr(0, []) — empty fields, so indef vs definite
+        //      array encoding is identical (d87980).
+        const mints: MintEntry[] = [{
+            policyId: CONFIG.beaconPolicyId,
+            assets: { [beaconName]: 1n },
+            redeemerCbor: bytesToHex(plutusConstr(0, [])),
+            scriptCbor: CONFIG.beaconScriptCbor,
+        }];
+
+        // C.10 Build unsigned tx via cmttk (provider is module-scope).
         showStatus('subscribe-status', '<span class="spinner"></span>Building transaction...', 'info');
 
-        const txBuildResult = await buildSubscriptionTx({
-            utxos: utxosRaw,
-            scriptAddrHex: scriptAddrHex,
-            scriptOutputLovelace: scriptOutputLovelace,
-            totalPayment: totalPayment,
-            isAdaPayment: isAdaPayment,
-            payPolicyId: payPolicyId,
-            payAssetName: payAssetName,
-            beaconPolicyId: CONFIG.beaconPolicyId,
-            beaconName: beaconName,
-            beaconScriptCbor: CONFIG.beaconScriptCbor,
-            datumCbor: datumCbor,
-            protocolParams: protocolParams,
-            subscriberKeyHash: subscriberKeyHash,
-            changeAddrHex: usedAddress,
-            getCollateral: function() { return api.getCollateral(); },
+        const unsigned = await buildUnsignedScriptTx({
+            provider,
+            walletAddress: hexAddressToBech32(usedAddress),
+            walletUtxos,
+            collateralUtxos,
+            scriptInputs: [],
+            outputs,
+            mints,
+            validFrom: Date.now() - 60_000,       // 1 min grace
+            validTo: Date.now() + 15 * 60_000,    // 15 min window
+            network: CONFIG.network as CardanoNetwork,
+            requiredSigners: [subscriberKeyHash],
         });
 
-        // C.11 Sign via CIP-30 wallet (partial = true because script inputs may be present)
-        console.log('txBuildResult.txHex length:', txBuildResult.txHex.length / 2, 'bytes');
+        console.log('unsigned.fee:', unsigned.fee.toString(), 'lovelace');
+        console.log('unsigned.txBody length:', unsigned.txBodyCbor.length, 'bytes');
 
-        // Debug: write tx hex to a file endpoint so it can be retrieved
-        try {
-            const debugEl = document.getElementById('result-content');
-            if (debugEl) {
-                debugEl.innerHTML = '<textarea style="width:100%;height:80px;font-size:10px;background:#111;color:#0f0;border:1px solid #333" onclick="this.select()">' + txBuildResult.txHex + '</textarea><p style="font-size:11px;color:#888">Copy this hex and send it for debugging</p>';
-                document.getElementById('result-card')!.classList.remove('hidden');
-            }
-        } catch(e) {}
-
+        // C.11 Sign via CIP-30 wallet (partial = true → returns witness set).
         showStatus('subscribe-status', '<span class="spinner"></span>Awaiting wallet signature...', 'info');
-        // C.11 Sign via CIP-30 wallet (partial=true → returns witness set)
-        showStatus('subscribe-status', '<span class="spinner"></span>Awaiting wallet signature...', 'info');
-        const walletWitnessHex = await api.signTx(txBuildResult.txHex, true);
+        const walletWitnessHex = await api.signTx(bytesToHex(unsigned.txBodyCbor), true);
 
-        // Merge wallet's vkey witnesses into our original tx
-        const walletWitBytes = hexToBytes(walletWitnessHex);
-        let vkeyWitnessesRaw: string;
-        if (walletWitBytes[0] === 0xa1 && walletWitBytes[1] === 0x00) {
-            vkeyWitnessesRaw = walletWitnessHex.slice(4);
-        } else {
-            vkeyWitnessesRaw = walletWitnessHex;
-        }
+        // C.12 Merge wallet witnesses into our partial witness set and submit.
+        const signedTxHex = mergeCip30Witness(unsigned, walletWitnessHex);
 
-        const mergedWitness = cborMap([
-            [cborUint(0), hexToBytes(vkeyWitnessesRaw)],
-            [cborUint(5), txBuildResult.redeemersCbor],
-            [cborUint(7), txBuildResult.plutusV3Scripts],
-        ]);
-
-        const signedTx = cborArray([
-            txBuildResult.txBody,
-            mergedWitness,
-            new Uint8Array([0xf5]),
-            new Uint8Array([0xf6]),
-        ]);
-        const signedTxHex = bytesToHex(signedTx);
-
-        // C.12 Submit via Koios
         showStatus('subscribe-status', '<span class="spinner"></span>Submitting transaction...', 'info');
-        const txHash = await submitViaKoios(signedTxHex);
+        const txHash = await provider.submitTx(signedTxHex);
 
         console.log('Transaction submitted:', txHash);
 
@@ -1484,11 +885,9 @@ async function loadUserNfts(): Promise<void> {
         const addresses = [walletBech32];
         if (enterpriseBech32 !== walletBech32) addresses.push(enterpriseBech32);
 
-        let rawUtxos = await koiosFetch('/address_utxos', {
-            _addresses: addresses,
-            _extended: true,
-        });
-        if (!rawUtxos || !Array.isArray(rawUtxos)) rawUtxos = [];
+        // cmttk fetchUtxos takes a single address; query in parallel and flatten.
+        const perAddr = await Promise.all(addresses.map(a => provider.fetchUtxos(a)));
+        const rawUtxos = perAddr.flat() as any[];
 
         userNfts = [];
         for (let u = 0; u < rawUtxos.length; u++) {
@@ -1559,18 +958,12 @@ async function fetchUserEncrypted(userAssetNameHex: string): Promise<string | nu
     console.log('[fetchUserEncrypted] policy:', CONFIG.nftPolicyId, 'refName:', refName);
 
     // Find addresses holding the reference token
-    const holders = await koiosFetch('/asset_addresses', {
-        _asset_policy: CONFIG.nftPolicyId,
-        _asset_name: refName,
-    });
+    const holders = await provider.fetchAssetAddresses(CONFIG.nftPolicyId + refName);
     console.log('[fetchUserEncrypted] holders:', holders);
     if (!holders || holders.length === 0) { console.log('[fetchUserEncrypted] no holders found'); return null; }
 
-    const addr = holders[0].payment_address;
-    const utxos = await koiosFetch('/address_utxos', {
-        _addresses: [addr],
-        _extended: true,
-    });
+    const addr = holders[0]!.address;
+    const utxos = await provider.fetchUtxos(addr) as any[];
     console.log('[fetchUserEncrypted] utxos at', addr, ':', utxos ? utxos.length : 0);
     if (!utxos || utxos.length === 0) { console.log('[fetchUserEncrypted] no utxos'); return null; }
 
