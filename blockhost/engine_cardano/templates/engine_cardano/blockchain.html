@@ -45,7 +45,7 @@
             <div class="form-group">
                 <label for="blockfrost_project_id">Blockfrost Project ID <span class="text-muted" style="font-size: 0.75rem;">(optional)</span></label>
                 <div style="display: flex; align-items: center; gap: 0;">
-                    <span id="blockfrost-prefix" style="font-family: monospace; padding: 0.5rem 0.4rem; background: var(--bg-secondary); border: 1px solid var(--border); border-right: none; border-radius: 4px 0 0 4px; white-space: nowrap; font-size: 0.875rem; color: var(--text-muted);">{{ bf_net }}</span>
+                    <span id="blockfrost-prefix" style="font-family: monospace; padding: 0.5rem 0.4rem; background: var(--bg-input); border: 1px solid var(--border); border-right: none; border-radius: 4px 0 0 4px; white-space: nowrap; font-size: 0.875rem; color: var(--text-muted);">{{ bf_net }}</span>
                     <input type="text" id="blockfrost_project_id" name="blockfrost_project_id"
                            value="{{ bf_bare }}"
                            placeholder="Leave blank to use Koios (free, no API key)"
@@ -95,7 +95,7 @@
                     <div class="alert alert-warning">
                         <strong>Important:</strong> Save your mnemonic phrase securely! It cannot be recovered later.
                     </div>
-                    <label>Mnemonic Phrase <span style="color: var(--danger);">*</span></label>
+                    <label>Mnemonic Phrase <span style="color: var(--error);">*</span></label>
                     <div class="address-box" style="line-height: 1.6;">
                         <span id="deployer-mnemonic" style="word-break: break-word;">-</span>
                         <button type="button" class="btn btn-small copy-btn" onclick="copyToClipboard('deployer-mnemonic', this)">Copy</button>
@@ -113,7 +113,7 @@
                     <input type="hidden" name="deployer_address" id="deployer-address-hidden"
                            value="{{ blockchain.get('deployer_address', '') }}">
 
-                    <div style="margin-top: 1rem; padding: 1rem; background: var(--bg-secondary); border-radius: 4px;">
+                    <div style="margin-top: 1rem; padding: 1rem; background: var(--bg-input); border-radius: 4px;">
                         <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 0.75rem;">
                             <label style="margin: 0;">Balance:</label>
                             <span id="wallet-balance" style="font-size: 1.25rem; font-weight: 500;">—</span>
@@ -152,7 +152,7 @@
                     Validate Mnemonic
                 </button>
                 <div id="import-status" class="hidden" style="margin-top: 0.5rem;"></div>
-                <div id="import-funding" class="hidden" style="margin-top: 1rem; padding: 1rem; background: var(--bg-secondary); border-radius: 4px;">
+                <div id="import-funding" class="hidden" style="margin-top: 1rem; padding: 1rem; background: var(--bg-input); border-radius: 4px;">
                     <label>Deployer Address</label>
                     <div class="address-box" style="margin-bottom: 0.75rem;">
                         <span id="import-deployer-address" style="font-family: monospace; word-break: break-all;">-</span>
