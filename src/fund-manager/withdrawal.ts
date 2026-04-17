@@ -18,8 +18,8 @@
  *   5. Submit each batch tx via the provider
  */
 
-import type { Utxo } from "cmttk";
-import { getProvider, parseKoiosUtxos } from "cmttk";
+import type { Utxo } from "@mwaddip/cmttk";
+import { getProvider, parseKoiosUtxos } from "@mwaddip/cmttk";
 import type { Addressbook, FundManagerConfig } from "./types.js";
 import { loadNetworkConfig } from "./web3-config.js";
 import { resolveRole } from "./addressbook.js";

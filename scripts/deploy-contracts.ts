@@ -42,7 +42,7 @@ import {
   cborArray,
   cborMap,
   cborTag,
-} from "cmttk";
+} from "@mwaddip/cmttk";
 import type { CardanoNetwork } from "../src/cardano/types.js";
 import { blake2b } from "@noble/hashes/blake2b";
 import { PrivateKey } from "noble-bip32ed25519";

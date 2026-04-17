@@ -8,11 +8,11 @@
  */
 
 import type { Addressbook } from "../../fund-manager/types.js";
-import { isValidAddress } from "cmttk";
-import { getProvider } from "cmttk";
+import { isValidAddress } from "@mwaddip/cmttk";
+import { getProvider } from "@mwaddip/cmttk";
 import { loadNetworkConfig } from "../../fund-manager/web3-config.js";
-import { deriveWallet } from "cmttk";
-import { parseKoiosUtxos, buildAndSubmitTransfer } from "cmttk";
+import { deriveWallet } from "@mwaddip/cmttk";
+import { parseKoiosUtxos, buildAndSubmitTransfer } from "@mwaddip/cmttk";
 import * as fs from "fs";
 
 export async function cleanupCommand(

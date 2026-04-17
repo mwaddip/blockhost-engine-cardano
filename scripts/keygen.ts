@@ -22,7 +22,7 @@
 
 import { generateMnemonic } from "@scure/bip39";
 import { wordlist as english } from "@scure/bip39/wordlists/english.js";
-import { deriveWallet } from "cmttk";
+import { deriveWallet } from "@mwaddip/cmttk";
 import type { CardanoNetwork } from "../src/cardano/types.js";
 
 function resolveNetwork(name: string): CardanoNetwork {

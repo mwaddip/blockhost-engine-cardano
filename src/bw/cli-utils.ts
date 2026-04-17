@@ -6,8 +6,8 @@
 
 import * as fs from "fs";
 import * as yaml from "js-yaml";
-import { isValidAddress, getProvider } from "cmttk";
-import type { CardanoProvider } from "cmttk";
+import { isValidAddress, getProvider } from "@mwaddip/cmttk";
+import type { CardanoProvider } from "@mwaddip/cmttk";
 import type { AssetId } from "../cardano/types.js";
 import { loadNetworkConfig } from "../fund-manager/web3-config.js";
 import type { Addressbook, AddressbookEntry } from "../fund-manager/types.js";

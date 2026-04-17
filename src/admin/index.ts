@@ -19,7 +19,7 @@
 
 import { hmac } from "@noble/hashes/hmac";
 import { sha256 } from "@noble/hashes/sha2";
-import type { CardanoProvider } from "cmttk";
+import type { CardanoProvider } from "@mwaddip/cmttk";
 import type {
   AdminCommand,
   AdminConfig,

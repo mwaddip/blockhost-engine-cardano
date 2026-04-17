@@ -16,7 +16,7 @@
  * Config from web3-defaults.yaml (blockfrost_project_id, network, nft_policy_id).
  */
 
-import { isValidAddress, getProvider } from "cmttk";
+import { isValidAddress, getProvider } from "@mwaddip/cmttk";
 import { loadWeb3Config } from "../fund-manager/web3-config.js";
 import { findNftHolder } from "../nft/reference.js";
 

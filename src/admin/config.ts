@@ -8,7 +8,7 @@
 import * as fs from "fs";
 import * as yaml from "js-yaml";
 import type { AdminConfig, CommandDatabase } from "./types.js";
-import { isValidAddress } from "cmttk";
+import { isValidAddress } from "@mwaddip/cmttk";
 import { BLOCKHOST_CONFIG_PATH, CONFIG_DIR } from "../paths.js";
 
 const ADMIN_COMMANDS_FILE = `${CONFIG_DIR}/admin-commands.json`;

@@ -11,7 +11,7 @@
  * sends a small amount of ADA to itself to create a clean UTxO.
  */
 
-import { getProvider, parseKoiosUtxos, buildAndSubmitTransfer, deriveWallet } from "cmttk";
+import { getProvider, parseKoiosUtxos, buildAndSubmitTransfer, deriveWallet } from "@mwaddip/cmttk";
 import { loadNetworkConfig } from "./web3-config.js";
 import type { Addressbook } from "./types.js";
 import * as fs from "fs";

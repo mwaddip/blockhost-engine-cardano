@@ -22,7 +22,7 @@ import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import { generateMnemonic, validateMnemonic } from "@scure/bip39";
 import { wordlist as english } from "@scure/bip39/wordlists/english.js";
-import { deriveWallet } from "cmttk";
+import { deriveWallet } from "@mwaddip/cmttk";
 
 function parseArgs(args: string[]): { command: string; flags: Record<string, string> } {
   const command = args[0] ?? "";

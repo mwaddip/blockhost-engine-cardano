@@ -8,8 +8,8 @@
  * SIGINT/SIGTERM.
  */
 
-import { getProvider } from "cmttk";
-import type { CardanoProvider } from "cmttk";
+import { getProvider } from "@mwaddip/cmttk";
+import type { CardanoProvider } from "@mwaddip/cmttk";
 import { loadWeb3Config } from "../fund-manager/web3-config.js";
 import { scanBeacons, type ScanDiff } from "./scanner.js";
 import {

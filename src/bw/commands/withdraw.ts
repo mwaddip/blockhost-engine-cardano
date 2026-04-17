@@ -19,15 +19,15 @@ import type { Addressbook } from "../../fund-manager/types.js";
 import type { SubscriptionDatum } from "../../cardano/types.js";
 import { resolveAddress } from "../cli-utils.js";
 import { loadWeb3Config } from "../../fund-manager/web3-config.js";
-import { getProvider } from "cmttk";
-import { deriveWallet } from "cmttk";
-import { getPaymentKeyHash } from "cmttk";
-import { Constr, Data } from "cmttk";
+import { getProvider } from "@mwaddip/cmttk";
+import { deriveWallet } from "@mwaddip/cmttk";
+import { getPaymentKeyHash } from "@mwaddip/cmttk";
+import { Constr, Data } from "@mwaddip/cmttk";
 import {
   parseKoiosUtxos,
   buildAndSubmitScriptTx,
-} from "cmttk";
-import type { Utxo, ScriptInput, TxOutput, MintEntry, Assets } from "cmttk";
+} from "@mwaddip/cmttk";
+import type { Utxo, ScriptInput, TxOutput, MintEntry, Assets } from "@mwaddip/cmttk";
 import * as fs from "fs";
 import { PLUTUS_JSON_PATH } from "../../paths.js";
 const MAX_BATCH = 15; // max UTXOs per transaction to stay within limits

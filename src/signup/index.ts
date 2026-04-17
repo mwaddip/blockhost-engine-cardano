@@ -31,7 +31,7 @@ import {
     cborMap,
     cborTag,
     decodeCbor,
-} from "cmttk/cbor";
+} from "@mwaddip/cmttk/cbor";
 import { bech32 } from "bech32";
 import {
     plutusConstr,

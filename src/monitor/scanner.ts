@@ -15,7 +15,7 @@
  *      scans between confirmations), the pending removal is cancelled.
  */
 
-import type { CardanoProvider } from "cmttk";
+import type { CardanoProvider } from "@mwaddip/cmttk";
 import type { CardanoNetwork } from "../cardano/types.js";
 import type { SubscriptionDatum } from "../cardano/types.js";
 

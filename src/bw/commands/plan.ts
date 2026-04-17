@@ -10,10 +10,10 @@
 import type { Addressbook } from "../../fund-manager/types.js";
 import { resolveToken } from "../cli-utils.js";
 import { loadWeb3Config } from "../../fund-manager/web3-config.js";
-import { getProvider } from "cmttk";
-import { deriveWallet } from "cmttk";
-import { Constr, Data, fromText } from "cmttk";
-import { buildAndSubmitScriptTx } from "cmttk";
+import { getProvider } from "@mwaddip/cmttk";
+import { deriveWallet } from "@mwaddip/cmttk";
+import { Constr, Data, fromText } from "@mwaddip/cmttk";
+import { buildAndSubmitScriptTx } from "@mwaddip/cmttk";
 import * as fs from "fs";
 import * as yaml from "js-yaml";
 import { CONFIG_DIR, STATE_DIR, MIN_ADA_FOR_TOKEN_OUTPUT } from "../../paths.js";

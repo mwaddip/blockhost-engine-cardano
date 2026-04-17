@@ -16,7 +16,7 @@
 import * as fs from "fs";
 import { loadAddressbook } from "../../bw/cli-utils.js";
 import { addressbookSave } from "../../root-agent/client.js";
-import { isValidAddress } from "cmttk";
+import { isValidAddress } from "@mwaddip/cmttk";
 import type { Addressbook } from "../../fund-manager/types.js";
 
 export async function initCommand(args: string[]): Promise<void> {

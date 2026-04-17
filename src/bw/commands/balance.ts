@@ -15,9 +15,9 @@ import {
   formatAda,
   formatToken,
 } from "../cli-utils.js";
-import { getProvider } from "cmttk";
+import { getProvider } from "@mwaddip/cmttk";
 import { loadNetworkConfig } from "../../fund-manager/web3-config.js";
-import { parseKoiosUtxos } from "cmttk";
+import { parseKoiosUtxos } from "@mwaddip/cmttk";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 

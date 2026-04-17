@@ -7,7 +7,7 @@
 
 import * as fs from "fs";
 import type { Addressbook } from "./types.js";
-import { isValidAddress, normalizeAddress } from "cmttk";
+import { isValidAddress, normalizeAddress } from "@mwaddip/cmttk";
 import {
   generateWallet as rootAgentGenerateWallet,
   addressbookSave,

@@ -15,7 +15,7 @@
  * attention).
  */
 
-import type { CardanoProvider } from "cmttk";
+import type { CardanoProvider } from "@mwaddip/cmttk";
 import { spawnSync } from "child_process";
 import { findNftHolder } from "../nft/reference.js";
 import { getCommand } from "../provisioner.js";

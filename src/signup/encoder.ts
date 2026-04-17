@@ -16,7 +16,7 @@ import {
     cborUint,
     cborArray,
     cborTag,
-} from "cmttk/cbor";
+} from "@mwaddip/cmttk/cbor";
 
 /** CBOR byte string with Plutus chunking (indefinite-length if > 64 bytes). */
 export function cborBytesChunked(bytes: Uint8Array | string): Uint8Array {

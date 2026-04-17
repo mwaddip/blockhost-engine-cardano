@@ -9,11 +9,11 @@
 
 import type { Addressbook } from "../../fund-manager/types.js";
 import { resolveAddress, resolveToken } from "../cli-utils.js";
-import { getProvider } from "cmttk";
+import { getProvider } from "@mwaddip/cmttk";
 import { loadNetworkConfig } from "../../fund-manager/web3-config.js";
-import { deriveWallet } from "cmttk";
-import { buildAndSubmitTransfer } from "cmttk";
-import type { Assets } from "cmttk";
+import { deriveWallet } from "@mwaddip/cmttk";
+import { buildAndSubmitTransfer } from "@mwaddip/cmttk";
+import type { Assets } from "@mwaddip/cmttk";
 import * as fs from "fs";
 import { MIN_ADA_FOR_TOKEN_OUTPUT } from "../../paths.js";
 

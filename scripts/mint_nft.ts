@@ -21,15 +21,15 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as yaml from "js-yaml";
 import { blake2b } from "@noble/hashes/blake2b";
-import { deriveWallet } from "cmttk";
-import { getProvider } from "cmttk";
-import { getPaymentKeyHash } from "cmttk";
-import { Constr, Data, applyParamsToScript } from "cmttk";
-import { buildAndSubmitScriptTx } from "cmttk";
-import { hexToBytes, bytesToHex } from "cmttk";
+import { deriveWallet } from "@mwaddip/cmttk";
+import { getProvider } from "@mwaddip/cmttk";
+import { getPaymentKeyHash } from "@mwaddip/cmttk";
+import { Constr, Data, applyParamsToScript } from "@mwaddip/cmttk";
+import { buildAndSubmitScriptTx } from "@mwaddip/cmttk";
+import { hexToBytes, bytesToHex } from "@mwaddip/cmttk";
 import { userTokenAssetName, referenceTokenAssetName } from "../src/nft/mint.js";
 import type { CardanoNetwork } from "../src/cardano/types.js";
-import type { Assets } from "cmttk";
+import type { Assets } from "@mwaddip/cmttk";
 
 import { CONFIG_DIR, STATE_DIR } from "../src/paths.js";
 

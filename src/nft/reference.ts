@@ -2,7 +2,7 @@
  * CIP-68 NFT holder lookup.
  */
 
-import type { CardanoProvider } from "cmttk";
+import type { CardanoProvider } from "@mwaddip/cmttk";
 import { userTokenAssetName } from "./mint.js";
 
 // ── NFT holder lookup ─────────────────────────────────────────────────────────
