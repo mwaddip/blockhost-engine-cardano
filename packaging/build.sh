@@ -155,6 +155,23 @@ else
     echo "WARNING: Failed to bundle deploy-contracts"
 fi
 
+# Bundle signup engine (browser-side IIFE — loaded by signup.html in the user's browser)
+# Writes to scripts/signup-engine.js so `generate-signup-page` finds it in dev mode too.
+npx esbuild "$PROJECT_DIR/src/signup/index.ts" \
+    --bundle \
+    --platform=browser \
+    --target=es2020 \
+    --format=iife \
+    --minify \
+    --external:https://* \
+    --outfile="$PROJECT_DIR/scripts/signup-engine.js"
+
+if [ ! -f "$PROJECT_DIR/scripts/signup-engine.js" ]; then
+    echo "ERROR: Failed to create signup-engine bundle"
+    exit 1
+fi
+echo "  signup-engine.js ($(du -h "$PROJECT_DIR/scripts/signup-engine.js" | cut -f1))"
+
 chmod 755 "$PKG_DIR/usr/bin/"*
 
 # ============================================
