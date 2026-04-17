@@ -1,5 +1,5 @@
 [Unit]
-Description=Blockhost Subscriptions Monitor (Cardano)
+Description=Blockhost Subscriptions Event Monitor
 After=network.target
 Requires=blockhost-root-agent.service
 After=blockhost-root-agent.service
@@ -9,7 +9,9 @@ Type=simple
 User=blockhost
 Group=blockhost
 Environment=HOME=/var/lib/blockhost
-EnvironmentFile=-/etc/blockhost/blockhost-env
+Environment=NODE_OPTIONS=--dns-result-order=ipv4first
+EnvironmentFile=/opt/blockhost/.env
+ExecStartPre=+/bin/bash -c 'chown root:blockhost /run/blockhost && chmod 2775 /run/blockhost'
 ExecStart=/usr/bin/node /usr/share/blockhost/monitor.js
 Restart=always
 RestartSec=10
@@ -18,7 +20,7 @@ StandardError=journal
 NoNewPrivileges=true
 ProtectSystem=strict
 PrivateTmp=true
-ReadWritePaths=/var/lib/blockhost
+ReadWritePaths=/var/lib/blockhost /run/blockhost
 
 [Install]
 WantedBy=multi-user.target
