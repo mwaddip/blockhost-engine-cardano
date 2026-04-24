@@ -21,6 +21,7 @@ const LEGACY_COMMANDS: Record<string, string> = {
   gc:               "blockhost-vm-gc",
   resume:           "blockhost-vm-resume",
   "update-gecos":   "blockhost-vm-update-gecos",
+  "guest-exec":     "blockhost-vm-guest-exec",
 };
 
 interface ProvisionerManifest {

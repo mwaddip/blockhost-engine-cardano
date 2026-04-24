@@ -7,12 +7,15 @@
  * Pipeline for new subscriptions (8 steps):
  *   1. Decrypt userEncrypted from datum (ECIES with server key)
  *   2. Call provisioner create with --owner-wallet and --expiry-days
- *   3. Parse JSON summary from provisioner stdout
+ *   3. Parse JSON summary from provisioner stdout, resolve host via network hook
  *   4. Encrypt connection details with user signature (SHAKE256 + AES-GCM)
  *   5. Call blockhost-mint-nft with --owner-wallet and --user-encrypted
  *   6. Parse token ID from mint stdout
  *   7. Call provisioner update-gecos with VM name, wallet, NFT token ID
  *   8. Mark NFT minted in database (Python subprocess)
+ *
+ * The engine is network-mode-agnostic: step 3's network hook call returns
+ * an IPv6 (broker), static IP (manual), or .onion (onion) as appropriate.
  */
 
 import { spawn, spawnSync } from "child_process";
@@ -20,11 +23,88 @@ import * as fs from "node:fs";
 import type { TrackedSubscription } from "../monitor/scanner.js";
 import { eciesDecrypt, symmetricEncrypt, loadServerPrivateKey } from "../crypto.js";
 import { getCommand } from "../provisioner.js";
-import { STATE_DIR, VMS_JSON_PATH, PYTHON_TIMEOUT_MS } from "../paths.js";
+import { STATE_DIR, VMS_JSON_PATH, CONFIG_DIR, PYTHON_TIMEOUT_MS } from "../paths.js";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const SSH_PORT = 22;
 const NEXT_VM_ID_FILE = `${STATE_DIR}/next-vm-id`;
+const NETWORK_MODE_PATH = `${CONFIG_DIR}/network-mode`;
+
+// ── Network mode ──────────────────────────────────────────────────────────────
+
+/**
+ * Read the active network mode from /etc/blockhost/network-mode.
+ * Valid values: "broker" | "manual" | "onion". Defaults to "broker" when
+ * the file is absent or contains an unrecognized value.
+ */
+function readNetworkMode(): string {
+  try {
+    const raw = fs.readFileSync(NETWORK_MODE_PATH, "utf8").trim();
+    if (raw === "broker" || raw === "manual" || raw === "onion") return raw;
+    console.warn(`[WARN] Invalid network mode "${raw}" in ${NETWORK_MODE_PATH} — defaulting to broker`);
+  } catch {
+    // File absent — backwards compatibility: broker
+  }
+  return "broker";
+}
+
+/** Active network mode, resolved once at module startup. */
+const NETWORK_MODE = readNetworkMode();
+
+// ── Network hook (Python bridge) ──────────────────────────────────────────────
+
+/**
+ * Resolve the subscriber-facing connection endpoint for a VM.
+ *
+ * Calls blockhost.network_hook.get_connection_endpoint via a Python subprocess.
+ *   broker  → IPv6 from broker-allocation.json
+ *   manual  → static IP from config
+ *   onion   → .onion address (creates hidden service, pushes into VM)
+ *
+ * Returns the resolved host on success, or null on failure.
+ */
+function getConnectionEndpoint(vmName: string, bridgeIp: string, mode: string): string | null {
+  const script = `
+import os
+from blockhost.network_hook import get_connection_endpoint
+print(get_connection_endpoint(os.environ['VM_NAME'], os.environ['BRIDGE_IP'], os.environ['NETWORK_MODE']))
+`;
+  const result = spawnSync("python3", ["-c", script], {
+    cwd: STATE_DIR,
+    timeout: PYTHON_TIMEOUT_MS,
+    env: { ...process.env, VM_NAME: vmName, BRIDGE_IP: bridgeIp, NETWORK_MODE: mode },
+    encoding: "utf8",
+  });
+  if (result.status !== 0) {
+    const errMsg = (result.stderr ?? "").toString().trim();
+    console.error(`[ERROR] network_hook.get_connection_endpoint failed: ${errMsg || `exit ${String(result.status)}`}`);
+    return null;
+  }
+  const host = (result.stdout ?? "").toString().trim();
+  return host.length > 0 ? host : null;
+}
+
+/**
+ * Release network resources allocated for a VM (onion hidden service, etc.).
+ * Best-effort — logs a warning on failure but does not throw.
+ */
+function networkHookCleanup(vmName: string, mode: string): void {
+  const script = `
+import os
+from blockhost.network_hook import cleanup
+cleanup(os.environ['VM_NAME'], os.environ['NETWORK_MODE'])
+`;
+  const result = spawnSync("python3", ["-c", script], {
+    cwd: STATE_DIR,
+    timeout: PYTHON_TIMEOUT_MS,
+    env: { ...process.env, VM_NAME: vmName, NETWORK_MODE: mode },
+    encoding: "utf8",
+  });
+  if (result.status !== 0) {
+    const errMsg = (result.stderr ?? "").toString().trim();
+    console.warn(`[WARN] network_hook.cleanup failed for ${vmName}: ${errMsg || `exit ${String(result.status)}`}`);
+  }
+}
 
 // ── VM ID counter ─────────────────────────────────────────────────────────────
 
@@ -330,24 +410,23 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
 
   console.log(`[INFO] VM summary: ip=${summary.ip}, vmid=${summary.vmid}`);
 
-  // Read IPv6 from vms.json (provisioner writes it there, not always in stdout)
-  let vmIpv6 = summary.ipv6 ?? "";
-  if (!vmIpv6) {
-    try {
-      const dbPath = VMS_JSON_PATH;
-      if (fs.existsSync(dbPath)) {
-        const db = JSON.parse(fs.readFileSync(dbPath, "utf8"));
-        vmIpv6 = db.vms?.[vmName]?.ipv6_address ?? "";
-      }
-    } catch { /* non-fatal */ }
+  // Resolve subscriber-facing host via the network hook.
+  //   broker → IPv6 from broker-allocation.json
+  //   manual → static IP from config
+  //   onion  → .onion (hidden service created + pushed into VM)
+  const hookHost = getConnectionEndpoint(vmName, summary.ip, NETWORK_MODE);
+  const host = hookHost ?? summary.ip;
+  if (!hookHost) {
+    console.warn(`[WARN] Network hook returned no host for ${vmName} (mode=${NETWORK_MODE}); falling back to bridge IP`);
+  } else {
+    console.log(`[INFO] Connection endpoint (${NETWORK_MODE}): ${host}`);
   }
 
   // Step 4: Encrypt connection details with user signature
   let userEncryptedOut = "";
 
   if (userSignature) {
-    const hostname = vmIpv6 || summary.ip;
-    const encrypted = encryptConnectionDetails(userSignature, hostname, summary.username);
+    const encrypted = encryptConnectionDetails(userSignature, host, summary.username);
     if (encrypted) {
       userEncryptedOut = encrypted;
       console.log("[OK] Connection details encrypted");
@@ -589,6 +668,10 @@ else:
   } else {
     console.error(`[ERROR] Failed to destroy VM ${vmName}: ${output}`);
   }
+
+  // Release network resources (onion hidden service, etc.) regardless of
+  // destroy success — leftover services are worse than a redundant cleanup.
+  networkHookCleanup(vmName, NETWORK_MODE);
 
   console.log("==========================================\n");
 }
