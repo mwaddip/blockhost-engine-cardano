@@ -171,13 +171,17 @@ async function setEncryptCommand(
   if (!refUtxo) {
     // Try broader search — token might be at a script address
     const holders = await provider.fetchAssetAddresses(refUnit);
-    for (const h of holders) {
-      const addrUtxos = await provider.fetchUtxos(h.address, refUnit);
-      const parsed = parseKoiosUtxos(addrUtxos);
+    const holderUtxos = await Promise.all(
+      holders.map(async (h) => ({
+        address: h.address,
+        parsed: parseKoiosUtxos(await provider.fetchUtxos(h.address, refUnit)),
+      })),
+    );
+    for (const { address, parsed } of holderUtxos) {
       for (const u of parsed) {
         if ((u.tokens[refUnit] ?? 0n) > 0n) {
           refUtxo = u;
-          refAddress = h.address;
+          refAddress = address;
           break;
         }
       }

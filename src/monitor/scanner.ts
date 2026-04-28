@@ -194,46 +194,52 @@ export async function scanBeacons(
 
   const uniqueAddresses = [...new Set(holders.map(h => h.payment_address))];
 
-  const utxos: BlockfrostUtxo[] = [];
-  for (const addr of uniqueAddresses) {
-    try {
-      const raw = await provider.fetchUtxos(addr) as Array<Record<string, unknown>>;
-
-      for (const u of raw) {
-        // Normalize response format (Koios vs Blockfrost)
-        const assetList = u["asset_list"] as Array<Record<string, string>> | undefined;
-        const bfAmount = Array.isArray(u["amount"]) ? u["amount"] as Array<{ unit: string; quantity: string }> : [];
-        const amount = [{ unit: "lovelace", quantity: String(u["value"] ?? bfAmount.find(a => a.unit === "lovelace")?.quantity ?? "0") }];
-        if (assetList) {
-          for (const a of assetList) {
-            amount.push({ unit: (a["policy_id"] ?? "") + (a["asset_name"] ?? ""), quantity: a["quantity"] ?? "0" });
-          }
-        } else if (Array.isArray(u["amount"])) {
-          // Blockfrost format
-          for (const a of u["amount"] as Array<{ unit: string; quantity: string }>) {
-            if (a.unit !== "lovelace") amount.push(a);
-          }
-        }
-
-        // Extract inline datum (Koios wraps in {bytes, value}, Blockfrost is direct)
-        const rawDatum = u["inline_datum"] as Record<string, unknown> | null;
-        const inlineDatum = rawDatum
-          ? ("value" in rawDatum ? rawDatum["value"] as PlutusValue : rawDatum as unknown as PlutusValue)
-          : null;
-
-        const bfUtxo: BlockfrostUtxo = {
-          tx_hash: (u["tx_hash"] ?? u["tx_id"]) as string,
-          tx_index: Number(u["tx_index"] ?? u["output_index"] ?? 0),
-          amount,
-          inline_datum: inlineDatum,
-        };
-        const hasBeacon = amount.some(
-          (a) => a.unit.startsWith(beaconPolicyId) && a.unit.length > 56,
-        );
-        if (hasBeacon) utxos.push(bfUtxo);
+  const fetched = await Promise.all(
+    uniqueAddresses.map(async (addr) => {
+      try {
+        const raw = await provider.fetchUtxos(addr) as Array<Record<string, unknown>>;
+        return { addr, raw };
+      } catch (err) {
+        console.warn(`[SCAN] Could not fetch UTXOs for ${addr}: ${err instanceof Error ? err.message : err}`);
+        return { addr, raw: [] as Array<Record<string, unknown>> };
       }
-    } catch (err) {
-      console.warn(`[SCAN] Could not fetch UTXOs for ${addr}: ${err instanceof Error ? err.message : err}`);
+    }),
+  );
+
+  const utxos: BlockfrostUtxo[] = [];
+  for (const { raw } of fetched) {
+    for (const u of raw) {
+      // Normalize response format (Koios vs Blockfrost)
+      const assetList = u["asset_list"] as Array<Record<string, string>> | undefined;
+      const bfAmount = Array.isArray(u["amount"]) ? u["amount"] as Array<{ unit: string; quantity: string }> : [];
+      const amount = [{ unit: "lovelace", quantity: String(u["value"] ?? bfAmount.find(a => a.unit === "lovelace")?.quantity ?? "0") }];
+      if (assetList) {
+        for (const a of assetList) {
+          amount.push({ unit: (a["policy_id"] ?? "") + (a["asset_name"] ?? ""), quantity: a["quantity"] ?? "0" });
+        }
+      } else if (Array.isArray(u["amount"])) {
+        // Blockfrost format
+        for (const a of u["amount"] as Array<{ unit: string; quantity: string }>) {
+          if (a.unit !== "lovelace") amount.push(a);
+        }
+      }
+
+      // Extract inline datum (Koios wraps in {bytes, value}, Blockfrost is direct)
+      const rawDatum = u["inline_datum"] as Record<string, unknown> | null;
+      const inlineDatum = rawDatum
+        ? ("value" in rawDatum ? rawDatum["value"] as PlutusValue : rawDatum as unknown as PlutusValue)
+        : null;
+
+      const bfUtxo: BlockfrostUtxo = {
+        tx_hash: (u["tx_hash"] ?? u["tx_id"]) as string,
+        tx_index: Number(u["tx_index"] ?? u["output_index"] ?? 0),
+        amount,
+        inline_datum: inlineDatum,
+      };
+      const hasBeacon = amount.some(
+        (a) => a.unit.startsWith(beaconPolicyId) && a.unit.length > 56,
+      );
+      if (hasBeacon) utxos.push(bfUtxo);
     }
   }
 
