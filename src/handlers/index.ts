@@ -266,25 +266,18 @@ db.set_nft_minted(os.environ['VM_NAME'], int(os.environ['NFT_TOKEN_ID']))
 
 /**
  * Record beacon_name and utxo_ref on a VM entry so the scanner can skip
- * the beacon on restart. Goes through vm_db's lockfile to avoid racing the
- * reconciler and other writers (set_nft_minted, extend_expiry).
+ * the beacon on restart. Goes through vm_db's lockfile (via the
+ * blockhost-vmdb CLI) to avoid racing the reconciler and other writers
+ * (set_nft_minted, extend_expiry). beacon_name and utxo_ref are
+ * Cardano-owned field names; common stays agnostic and just merges them.
  */
 function updateBeaconInfo(vmName: string, beaconName: string, utxoRef: string): void {
-  const script = `
-import os
-from blockhost.vm_db import get_database
-db = get_database()
-db.update_beacon_info(
-    os.environ['VM_NAME'],
-    os.environ['BEACON_NAME'],
-    os.environ['UTXO_REF'],
-)
-`;
-  const result = spawnSync("python3", ["-c", script], {
-    cwd: STATE_DIR,
-    timeout: PYTHON_TIMEOUT_MS,
-    env: { ...process.env, VM_NAME: vmName, BEACON_NAME: beaconName, UTXO_REF: utxoRef },
-  });
+  const fields = JSON.stringify({ beacon_name: beaconName, utxo_ref: utxoRef });
+  const result = spawnSync(
+    "blockhost-vmdb",
+    ["update-fields", vmName, "--fields", fields],
+    { timeout: PYTHON_TIMEOUT_MS },
+  );
   if (result.status !== 0) {
     const errMsg = result.stderr ? result.stderr.toString().trim() : "";
     console.warn(
