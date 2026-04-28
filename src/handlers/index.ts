@@ -60,7 +60,7 @@ const NETWORK_MODE = readNetworkMode();
 /**
  * Resolve the subscriber-facing connection endpoint for a VM.
  *
- * Calls blockhost.network_hook.get_connection_endpoint via a Python subprocess.
+ * Calls the blockhost-network-hook CLI:
  *   broker  → IPv6 from broker-allocation.json
  *   manual  → static IP from config
  *   onion   → .onion address (creates hidden service, pushes into VM)
@@ -68,20 +68,14 @@ const NETWORK_MODE = readNetworkMode();
  * Returns the resolved host on success, or null on failure.
  */
 function getConnectionEndpoint(vmName: string, bridgeIp: string, mode: string): string | null {
-  const script = `
-import os
-from blockhost.network_hook import get_connection_endpoint
-print(get_connection_endpoint(os.environ['VM_NAME'], os.environ['BRIDGE_IP'], os.environ['NETWORK_MODE']))
-`;
-  const result = spawnSync("python3", ["-c", script], {
-    cwd: STATE_DIR,
-    timeout: PYTHON_TIMEOUT_MS,
-    env: { ...process.env, VM_NAME: vmName, BRIDGE_IP: bridgeIp, NETWORK_MODE: mode },
-    encoding: "utf8",
-  });
+  const result = spawnSync(
+    "blockhost-network-hook",
+    ["resolve", vmName, bridgeIp, mode],
+    { timeout: PYTHON_TIMEOUT_MS, encoding: "utf8" },
+  );
   if (result.status !== 0) {
     const errMsg = (result.stderr ?? "").toString().trim();
-    console.error(`[ERROR] network_hook.get_connection_endpoint failed: ${errMsg || `exit ${String(result.status)}`}`);
+    console.error(`[ERROR] network-hook resolve failed: ${errMsg || `exit ${String(result.status)}`}`);
     return null;
   }
   const host = (result.stdout ?? "").toString().trim();
@@ -93,20 +87,14 @@ print(get_connection_endpoint(os.environ['VM_NAME'], os.environ['BRIDGE_IP'], os
  * Best-effort — logs a warning on failure but does not throw.
  */
 function networkHookCleanup(vmName: string, mode: string): void {
-  const script = `
-import os
-from blockhost.network_hook import cleanup
-cleanup(os.environ['VM_NAME'], os.environ['NETWORK_MODE'])
-`;
-  const result = spawnSync("python3", ["-c", script], {
-    cwd: STATE_DIR,
-    timeout: PYTHON_TIMEOUT_MS,
-    env: { ...process.env, VM_NAME: vmName, NETWORK_MODE: mode },
-    encoding: "utf8",
-  });
+  const result = spawnSync(
+    "blockhost-network-hook",
+    ["cleanup", vmName, mode],
+    { timeout: PYTHON_TIMEOUT_MS, encoding: "utf8" },
+  );
   if (result.status !== 0) {
     const errMsg = (result.stderr ?? "").toString().trim();
-    console.warn(`[WARN] network_hook.cleanup failed for ${vmName}: ${errMsg || `exit ${String(result.status)}`}`);
+    console.warn(`[WARN] network-hook cleanup failed for ${vmName}: ${errMsg || `exit ${String(result.status)}`}`);
   }
 }
 
