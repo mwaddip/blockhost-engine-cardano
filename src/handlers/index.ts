@@ -242,26 +242,50 @@ function parseMintOutput(stdout: string): number | null {
 // ── Database helpers ──────────────────────────────────────────────────────────
 
 /**
- * Mark an NFT as minted in the VM database (synchronous Python subprocess).
+ * Mark an NFT as minted in the VM database via the blockhost-vmdb CLI.
  */
 function markNftMinted(vmName: string, nftTokenId: number): void {
-  const script = `
-import os
-from blockhost.vm_db import get_database
-db = get_database()
-db.set_nft_minted(os.environ['VM_NAME'], int(os.environ['NFT_TOKEN_ID']))
-`;
-  const result = spawnSync("python3", ["-c", script], {
-    cwd: STATE_DIR,
-    timeout: PYTHON_TIMEOUT_MS,
-    env: { ...process.env, VM_NAME: vmName, NFT_TOKEN_ID: String(nftTokenId) },
-  });
+  const result = spawnSync(
+    "blockhost-vmdb",
+    ["mark-nft-minted", vmName, String(nftTokenId)],
+    { timeout: PYTHON_TIMEOUT_MS },
+  );
   if (result.status !== 0) {
     const errMsg = result.stderr ? result.stderr.toString().trim() : "";
     console.error(
       `[WARN] Failed to mark NFT ${nftTokenId} as minted in database${errMsg ? ": " + errMsg : ""}`,
     );
   }
+}
+
+/**
+ * Look up a VM name by beacon (with subscriber fallback). Read-only query
+ * against vm_db; no mutation, no race. Returns null if no VM matches.
+ *
+ * Used by the extend and remove handlers, both of which receive a beacon
+ * name and need to resolve it to a vm_name before issuing the actual
+ * mutator call (extend-expiry / destroy).
+ */
+function lookupVmName(beaconName: string, subscriber: string): string | null {
+  const script = `
+import os, sys
+from blockhost.vm_db import get_database
+
+db = get_database()
+vm = db.get_vm_by_beacon(os.environ['BEACON_NAME']) or db.get_vm_by_owner(os.environ['SUBSCRIBER'])
+if vm:
+    print(vm['vm_name'])
+else:
+    sys.exit(1)
+`;
+  const result = spawnSync("python3", ["-c", script], {
+    cwd: STATE_DIR,
+    timeout: PYTHON_TIMEOUT_MS,
+    env: { ...process.env, BEACON_NAME: beaconName, SUBSCRIBER: subscriber },
+    encoding: "utf8",
+  });
+  if (result.status !== 0) return null;
+  return (result.stdout ?? "").toString().trim() || null;
 }
 
 /**
@@ -519,63 +543,37 @@ export async function handleSubscriptionExtended(
   const additionalDays = calculateAdditionalDays(old.datum.expiry, newDatum.expiry);
   console.log(`Additional days: ${additionalDays}`);
 
-  // We need to find the VM name associated with this beacon.
-  // The beacon name is the on-chain handle; the VM name is stored in the DB.
-  // We query by subscriber address since that's what we have.
-  // Use Python to update expiry and check if VM needs resuming.
-  const script = `
-import os
-from blockhost.vm_db import get_database
+  // Resolve beacon → vm_name (read-only, no race). Then call the CLI's
+  // extend-expiry, which performs the suspended-status check inside the
+  // same lockfile as the extend itself — closing the TOCTOU race the
+  // previous combined Python script had between reading status and
+  // calling extend_expiry.
+  const vmName = lookupVmName(beaconName, newDatum.subscriber);
+  if (!vmName) {
+    console.warn(`[WARN] VM not found for beacon ${beaconName} / subscriber ${newDatum.subscriber}`);
+    console.log("===========================================\n");
+    return;
+  }
 
-beacon_name = os.environ['BEACON_NAME']
-subscriber = os.environ['SUBSCRIBER']
-additional_days = int(os.environ['ADDITIONAL_DAYS'])
-db = get_database()
-vm = db.get_vm_by_beacon(beacon_name) or db.get_vm_by_owner(subscriber)
-if vm:
-    old_status = vm.get('status', 'unknown')
-    db.extend_expiry(vm['vm_name'], additional_days)
-    print(f"Extended {vm['vm_name']} expiry by {additional_days} days")
-    if old_status == 'suspended':
-        print("NEEDS_RESUME")
-    print(f"VM_NAME={vm['vm_name']}")
-else:
-    print(f"VM not found for beacon {beacon_name} / subscriber {subscriber}")
-`;
-
-  const proc = spawn("python3", ["-c", script], {
-    cwd: STATE_DIR,
-    env: {
-      ...process.env,
-      BEACON_NAME: beaconName,
-      SUBSCRIBER: newDatum.subscriber,
-      ADDITIONAL_DAYS: String(additionalDays),
-    },
-  });
-
-  let output = "";
-  proc.stdout.on("data", (data: Buffer) => { output += data.toString(); });
-  proc.stderr.on("data", (data: Buffer) => { output += data.toString(); });
-
-  const { needsResume, vmName } = await new Promise<{ needsResume: boolean; vmName: string | null }>(
-    (resolve) => {
-      proc.on("close", (code) => {
-        if (code === 0) {
-          const lines = output.trim().split("\n");
-          console.log(`[OK] ${lines[0] ?? ""}`);
-          const vmNameLine = lines.find((l) => l.startsWith("VM_NAME="));
-          const parsedVmName = vmNameLine ? vmNameLine.slice("VM_NAME=".length) : null;
-          resolve({ needsResume: output.includes("NEEDS_RESUME"), vmName: parsedVmName });
-        } else {
-          console.error(`[ERROR] Failed to extend expiry: ${output}`);
-          resolve({ needsResume: false, vmName: null });
-        }
-      });
-    },
+  const extendResult = spawnSync(
+    "blockhost-vmdb",
+    ["extend-expiry", vmName, String(additionalDays)],
+    { timeout: PYTHON_TIMEOUT_MS, encoding: "utf8" },
   );
+  if (extendResult.status !== 0) {
+    const errMsg = (extendResult.stderr ?? "").toString().trim();
+    console.error(`[ERROR] Failed to extend expiry for ${vmName}${errMsg ? ": " + errMsg : ""}`);
+    console.log("===========================================\n");
+    return;
+  }
 
-  // Resume VM if it was suspended
-  if (needsResume && vmName) {
+  const stdout = (extendResult.stdout ?? "").toString();
+  const firstLine = stdout.split("\n")[0]?.trim() ?? "";
+  if (firstLine) console.log(`[OK] ${firstLine}`);
+  const needsResume = stdout.includes("NEEDS_RESUME");
+
+  // Resume VM if the CLI reports it was suspended at extend time.
+  if (needsResume) {
     console.log(`Resuming suspended VM: ${vmName}`);
     const resumeResult = await runCommand(getCommand("resume"), [vmName]);
     if (resumeResult.code === 0) {
@@ -613,33 +611,12 @@ export async function handleSubscriptionRemoved(sub: TrackedSubscription): Promi
   console.log("------------------------------------------");
 
   // Look up the VM name by beacon name (or subscriber fallback) then destroy
-  const script = `
-import os, sys
-from blockhost.vm_db import get_database
-
-beacon_name = os.environ['BEACON_NAME']
-subscriber = os.environ['SUBSCRIBER']
-db = get_database()
-vm = db.get_vm_by_beacon(beacon_name) or db.get_vm_by_owner(subscriber)
-if vm:
-    print(vm['vm_name'])
-else:
-    sys.exit(1)
-`;
-
-  const lookupResult = spawnSync("python3", ["-c", script], {
-    cwd: STATE_DIR,
-    timeout: PYTHON_TIMEOUT_MS,
-    env: { ...process.env, BEACON_NAME: beaconName, SUBSCRIBER: datum.subscriber },
-  });
-
-  if (lookupResult.status !== 0) {
+  const vmName = lookupVmName(beaconName, datum.subscriber);
+  if (!vmName) {
     console.warn(`[WARN] VM not found for beacon ${beaconName} — nothing to destroy`);
     console.log("==========================================\n");
     return;
   }
-
-  const vmName = lookupResult.stdout.toString().trim();
   console.log(`Destroying VM: ${vmName}`);
 
   const { success, output } = await destroyVm(vmName);
