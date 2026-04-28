@@ -12,9 +12,9 @@ import { getProvider } from "@mwaddip/cmttk";
 import { deriveWallet } from "@mwaddip/cmttk";
 import { getPaymentKeyHash } from "@mwaddip/cmttk";
 import { Constr, Data } from "@mwaddip/cmttk";
-import { parseKoiosUtxos, buildAndSubmitScriptTx } from "@mwaddip/cmttk";
+import { parseKoiosUtxos, buildAndSubmitScriptTx, applyParamsToScript } from "@mwaddip/cmttk";
 import type { Utxo, Assets } from "@mwaddip/cmttk";
-import { hexToBytes, bytesToHex, cborArray, cborBytes, decodeCbor, addressToHex } from "@mwaddip/cmttk";
+import { addressToHex } from "@mwaddip/cmttk";
 import { referenceTokenAssetName } from "../../nft/mint.js";
 import * as fs from "fs";
 import { CONFIG_DIR, MIN_ADA_FOR_TOKEN_OUTPUT } from "../../paths.js";
@@ -24,67 +24,6 @@ import { CONFIG_DIR, MIN_ADA_FOR_TOKEN_OUTPUT } from "../../paths.js";
 function encodeNftReferenceDatum(userEncryptedHex: string): string {
   const d = new Constr(0, [userEncryptedHex]);
   return Data.to(d);
-}
-
-// ── Script parameterization ─────────────────────────────────────────────────
-
-/**
- * Apply parameters to a UPLC script (Plutus V3).
- *
- * Takes a flat CBOR-encoded UPLC script and wraps it in applied lambdas
- * for each parameter: apply(apply(script, param1), param2)...
- *
- * The script's outer CBOR is: bytes(inner_flat_bytes)
- * The parameterized script is: bytes(apply(original, encoded_params))
- *
- * For Aiken-compiled scripts, parameters are Plutus Data values
- * encoded as CBOR and passed via the double-CBOR wrapping convention.
- *
- * This matches Lucid's applyParamsToScript behavior.
- */
-function applyParamsToScript(compiledCode: string, params: string[]): string {
-  // The compiledCode is hex CBOR: a single CBOR bytes item containing the flat UPLC
-  // To apply parameters, we wrap in Plutus apply nodes.
-  // The convention used by CIP-57 / Aiken / Lucid:
-  //   1. Decode the outer CBOR bytes wrapper to get the raw program bytes
-  //   2. For each param, create: CBOR-array [2, program, CBOR-array [1, param_as_data]]
-  //      where 2 = Apply, 1 = Const, and param_as_data is CBOR-in-CBOR (tag 24)
-  //   3. Re-wrap in CBOR bytes
-
-  let scriptBytes = hexToBytes(compiledCode);
-
-  // Unwrap outer CBOR bytes if present
-  const decoded = decodeCbor(scriptBytes, 0);
-  if (decoded.value instanceof Uint8Array) {
-    scriptBytes = decoded.value;
-  }
-
-  // Apply each parameter
-  let program = scriptBytes;
-  for (const paramHex of params) {
-    // Encode the parameter as Plutus Data CBOR-in-CBOR
-    const paramData = hexToBytes(Data.to(paramHex));
-
-    // Build: [2, program, [1, tag24(paramData)]]
-    // This is the UPLC Apply(program, Const(paramData)) encoding
-    // Using list encoding that Aiken/Lucid expect
-    const constNode = cborArray([
-      new Uint8Array([0x01]), // Const tag
-      cborArray([            // Const value: [type_tag, data]
-        new Uint8Array([0x05]), // type tag for Data
-        new Uint8Array([0xd8, 0x18, ...cborBytes(paramData)]), // tag 24 + CBOR bytes
-      ]),
-    ]);
-
-    program = cborArray([
-      new Uint8Array([0x02]), // Apply tag
-      cborBytes(program),     // wrapped program
-      constNode,
-    ]).slice(0); // ensure clean copy
-  }
-
-  // Re-wrap in CBOR bytes
-  return bytesToHex(cborBytes(program));
 }
 
 // ── CLI handler ──────────────────────────────────────────────────────────────
