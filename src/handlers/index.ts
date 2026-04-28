@@ -20,10 +20,12 @@
 
 import { spawn, spawnSync } from "child_process";
 import * as fs from "node:fs";
+import { bech32 } from "bech32";
 import type { TrackedSubscription } from "../monitor/scanner.js";
 import { eciesDecrypt, symmetricEncrypt, loadServerPrivateKey } from "../crypto.js";
 import { getCommand } from "../provisioner.js";
 import { isFundCycleInProgress } from "../fund-manager/index.js";
+import { loadNetworkConfig } from "../fund-manager/web3-config.js";
 import { allocateCounter } from "../state/counter.js";
 import { STATE_DIR, VMS_JSON_PATH, CONFIG_DIR, PYTHON_TIMEOUT_MS } from "../paths.js";
 
@@ -411,8 +413,6 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
   // Step 5: Mint NFT
   // The subscriber field is a payment key hash — mint script needs a bech32 address.
   // Build an enterprise address (key hash only, no staking) from the payment credential.
-  const { bech32 } = await import("bech32");
-  const { loadNetworkConfig } = await import("../fund-manager/web3-config.js");
   const { network: currentNetwork } = loadNetworkConfig();
   const headerByte = currentNetwork === "mainnet" ? 0x61 : 0x60;
   const addrBytes = Buffer.from([headerByte, ...Buffer.from(datum.subscriber, "hex")]);
