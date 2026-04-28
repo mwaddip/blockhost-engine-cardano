@@ -77,6 +77,15 @@ export function isProvisioningInProgress(): boolean {
   }
 }
 
+/**
+ * Return true if the fund cycle is currently running in this process.
+ * The subscription handler checks this before its mint subprocess to avoid
+ * racing the fund-cycle's withdrawal tx on deployer-wallet UTXO selection.
+ */
+export function isFundCycleInProgress(): boolean {
+  return fundCycleInProgress;
+}
+
 // ── Collateral check ────────────────────────────────────────────────────────
 
 /**

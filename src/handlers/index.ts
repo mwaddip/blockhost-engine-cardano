@@ -23,6 +23,7 @@ import * as fs from "node:fs";
 import type { TrackedSubscription } from "../monitor/scanner.js";
 import { eciesDecrypt, symmetricEncrypt, loadServerPrivateKey } from "../crypto.js";
 import { getCommand } from "../provisioner.js";
+import { isFundCycleInProgress } from "../fund-manager/index.js";
 import { allocateCounter } from "../state/counter.js";
 import { STATE_DIR, VMS_JSON_PATH, CONFIG_DIR, PYTHON_TIMEOUT_MS } from "../paths.js";
 
@@ -291,6 +292,16 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
     return;
   }
 
+  // Defer if the fund cycle is collecting subscription UTXOs in this process.
+  // Both paths spend deployer-wallet UTXOs and would race on selection.
+  // The scanner re-detects the beacon on the next pass and we retry.
+  if (isFundCycleInProgress()) {
+    console.log(
+      `[INFO] Fund cycle in progress, deferring provisioning for beacon ${beaconName}`,
+    );
+    return;
+  }
+
   const vmId = await allocateCounter(NEXT_VM_ID_FILE);
   const vmName = formatVmName(vmId);
   const expiryDays = calculateExpiryDays(datum.expiry, BigInt(Date.now()));
@@ -311,11 +322,19 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
   if (datum.userEncrypted && datum.userEncrypted.length > 0) {
     console.log("Decrypting user signature...");
     userSignature = decryptUserSignature(datum.userEncrypted);
-    if (userSignature) {
-      console.log("User signature decrypted successfully");
-    } else {
-      console.warn("[WARN] Could not decrypt user signature, proceeding without encrypted connection details");
+    if (!userSignature) {
+      // Subscriber paid and supplied an encrypted signature, but we cannot
+      // decrypt it. Continuing would mint an NFT with no encrypted connection
+      // details — the subscriber would never be able to authenticate against
+      // their VM. Abort and let an operator investigate.
+      console.error(
+        `[ERROR] Aborting provisioning for beacon ${beaconName}: ` +
+        `userEncrypted is set but ECIES decryption failed`,
+      );
+      console.log("==========================================\n");
+      return;
     }
+    console.log("User signature decrypted successfully");
   }
 
   // Step 2: Create VM

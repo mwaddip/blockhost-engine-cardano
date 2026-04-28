@@ -46,29 +46,24 @@ export async function executeBalance(
   const { network, blockfrostProjectId, koiosUrl } = loadNetworkConfig();
   const provider = getProvider(network, blockfrostProjectId || undefined, koiosUrl || undefined);
 
-  // Fetch UTXOs and sum balances
-  let amounts: Array<{ unit: string; quantity: string }> = [];
-  try {
-    const rawUtxos = await provider.fetchUtxos(address);
-    const utxos = parseKoiosUtxos(rawUtxos);
+  // Fetch UTXOs and sum balances. Provider errors propagate so callers can
+  // distinguish "wallet has no UTXOs" (succeeds with adaBalance=0) from
+  // "Koios is unreachable" (throws). The fund manager relies on this to
+  // avoid triggering top-ups on transient RPC failures.
+  const rawUtxos = await provider.fetchUtxos(address);
+  const utxos = parseKoiosUtxos(rawUtxos);
 
-    // Aggregate all assets across UTXOs
-    const totals = new Map<string, bigint>();
-    for (const utxo of utxos) {
-      totals.set("lovelace", (totals.get("lovelace") ?? 0n) + utxo.lovelace);
-      for (const [unit, qty] of Object.entries(utxo.tokens)) {
-        totals.set(unit, (totals.get(unit) ?? 0n) + qty);
-      }
+  const totals = new Map<string, bigint>();
+  for (const utxo of utxos) {
+    totals.set("lovelace", (totals.get("lovelace") ?? 0n) + utxo.lovelace);
+    for (const [unit, qty] of Object.entries(utxo.tokens)) {
+      totals.set(unit, (totals.get(unit) ?? 0n) + qty);
     }
-    amounts = Array.from(totals.entries()).map(([unit, qty]) => ({
-      unit,
-      quantity: qty.toString(),
-    }));
-  } catch (err) {
-    // Address not found or no UTXOs — treat as zero, but log the error
-    console.error(`[WARN] Could not fetch UTXOs for ${address}: ${err instanceof Error ? err.message : err}`);
-    amounts = [];
   }
+  const amounts = Array.from(totals.entries()).map(([unit, qty]) => ({
+    unit,
+    quantity: qty.toString(),
+  }));
 
   // ADA balance
   const lovelaceEntry = amounts.find((a) => a.unit === "lovelace");

@@ -18,15 +18,32 @@ import { CONFIG_DIR, ADDRESSBOOK_PATH } from "../paths.js";
 /**
  * Read /etc/blockhost/addressbook.json.
  *
+ * Validates each entry's bech32 address and prunes invalid ones.
  * Returns an empty object if the file does not exist.
  */
 export function loadAddressbook(): Addressbook {
-  if (!fs.existsSync(ADDRESSBOOK_PATH)) {
+  try {
+    if (!fs.existsSync(ADDRESSBOOK_PATH)) {
+      return {};
+    }
+
+    const raw = fs.readFileSync(ADDRESSBOOK_PATH, "utf8");
+    const book = JSON.parse(raw) as Addressbook;
+
+    for (const [role, entry] of Object.entries(book)) {
+      if (!isValidAddress(entry.address)) {
+        console.error(
+          `[ADDRESSBOOK] Invalid address for role '${role}': ${entry.address}`,
+        );
+        delete book[role];
+      }
+    }
+
+    return book;
+  } catch (err) {
+    console.error(`[ADDRESSBOOK] Error loading addressbook: ${err}`);
     return {};
   }
-
-  const raw = fs.readFileSync(ADDRESSBOOK_PATH, "utf8");
-  return JSON.parse(raw) as Addressbook;
 }
 
 // ── Address resolution ────────────────────────────────────────────────────────
