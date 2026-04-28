@@ -60,9 +60,11 @@ async function configStableCommand(args: string[]): Promise<void> {
     process.exit(1);
   }
 
-  console.log(`[TODO] Set payment token to: ${newToken}`);
-  console.log("TODO: write path not yet implemented.");
-  console.log(
-    "      Update blockchain.payment_token in web3-defaults.yaml or the on-chain config UTXO.",
+  console.error(
+    `bw config stable: write path not implemented (would set ${newToken}).`,
   );
+  console.error(
+    "Update blockchain.payment_token in web3-defaults.yaml manually for now.",
+  );
+  process.exit(1);
 }

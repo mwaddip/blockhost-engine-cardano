@@ -158,15 +158,19 @@ export function getProviderClient(): CardanoProvider {
 // ── Formatting helpers ────────────────────────────────────────────────────────
 
 /**
- * Format a lovelace amount as a human-readable ADA string.
+ * Format a lovelace amount as an ADA decimal string.
  *
- * Example: 1_500_000n → "1.500000 ADA"
+ * Example: 1_500_000n → "1.500000 ADA" (default), or "1.500000" with withUnit=false.
+ *
+ * Pass `withUnit: false` when feeding the value into a CLI argument that
+ * expects a numeric string (e.g. `bw send <amount>`); use the default for
+ * human-readable logging.
  */
-export function formatAda(lovelace: bigint): string {
+export function formatAda(lovelace: bigint, withUnit = true): string {
   const whole = lovelace / 1_000_000n;
   const frac = lovelace % 1_000_000n;
   const fracStr = frac.toString().padStart(6, "0");
-  return `${whole}.${fracStr} ADA`;
+  return `${whole}.${fracStr}${withUnit ? " ADA" : ""}`;
 }
 
 /**

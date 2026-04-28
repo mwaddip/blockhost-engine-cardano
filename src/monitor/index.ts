@@ -161,7 +161,7 @@ async function poll(
 
 // ── Shutdown ──────────────────────────────────────────────────────────────────
 
-function setupShutdown(): void {
+function setupShutdown(adminEnabled: boolean): void {
   let shuttingDown = false;
 
   const shutdown = (signal: string) => {
@@ -169,6 +169,9 @@ function setupShutdown(): void {
     shuttingDown = true;
     console.log(`\n[MONITOR] Received ${signal}, shutting down...`);
     running = false;
+    if (adminEnabled) {
+      shutdownAdminCommands().catch(() => undefined);
+    }
     // Allow the current poll iteration to finish, then exit
     setTimeout(() => process.exit(0), 2000);
   };
@@ -187,8 +190,6 @@ async function main(): Promise<void> {
     console.log(`  Poll: ${POLL_INTERVAL_MS / 1000}s | Reconcile: ${RECONCILE_INTERVAL_MS / 1000}s | Admin: ${ADMIN_SCAN_INTERVAL_MS / 1000}s | Fund: 10min`);
   }
   console.log("==============================================");
-
-  setupShutdown();
 
   let config;
   try {
@@ -209,13 +210,7 @@ async function main(): Promise<void> {
     console.log(`Admin commands:   disabled (no admin config in blockhost.yaml)`);
   }
 
-  // Register shutdown hook for admin (closes active knock sessions on exit)
-  process.on("SIGTERM", () => {
-    shutdownAdminCommands().catch(() => undefined);
-  });
-  process.on("SIGINT", () => {
-    shutdownAdminCommands().catch(() => undefined);
-  });
+  setupShutdown(adminConfig !== null);
 
   console.log(`Network:          ${config.network}`);
   console.log(`Provider:         ${provider.name}`);

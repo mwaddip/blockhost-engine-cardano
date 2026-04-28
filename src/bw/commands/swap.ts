@@ -40,11 +40,11 @@ export async function swapCommand(
     ? `${fromAsset.policyId.slice(0, 8)}...${fromAsset.assetName}`
     : "ADA";
 
-  console.log(
-    `[TODO] Swap ${amountStr} ${label} → ADA for wallet ${walletRole}`,
+  console.error(
+    `bw swap: not yet implemented (would swap ${amountStr} ${label} → ADA for ${walletRole}).`,
   );
-  console.log("TODO: DEX integration not yet implemented.");
-  console.log(
-    "      Will require a Cardano DEX (e.g. Minswap/SundaeSwap) and MeshJS tx building.",
+  console.error(
+    "Requires Cardano DEX (Minswap/SundaeSwap) integration via cmttk.",
   );
+  process.exit(1);
 }

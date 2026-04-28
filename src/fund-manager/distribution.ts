@@ -20,18 +20,6 @@ import { executeBalance } from "../bw/commands/balance.js";
 import { executeSend } from "../bw/commands/send.js";
 import { formatAda } from "../bw/cli-utils.js";
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/**
- * Convert lovelace to ADA decimal string for executeSend.
- * e.g. 1_500_000n → "1.500000"
- */
-function lovelaceToStr(lovelace: bigint): string {
-  const whole = lovelace / 1_000_000n;
-  const frac = (lovelace % 1_000_000n).toString().padStart(6, "0");
-  return `${whole}.${frac}`;
-}
-
 // ── Step 2: Hot wallet ADA top-up ─────────────────────────────────────────────
 
 /**
@@ -62,7 +50,7 @@ export async function topUpHotWalletGas(
   }
 
   console.log(`[FUND] Topping up hot wallet gas: ${formatAda(needed)}`);
-  await executeSend(lovelaceToStr(needed), "ada", "server", "hot", book);
+  await executeSend(formatAda(needed, false), "ada", "server", "hot", book);
   console.log("[FUND] Hot wallet gas top-up complete");
 }
 
@@ -168,7 +156,7 @@ export async function distributeRevenueShares(
     if (share === 0n) continue;
 
     try {
-      const shareStr = lovelaceToStr(share);
+      const shareStr = formatAda(share, false);
       await executeSend(shareStr, "ada", "hot", recipient.role, book);
       console.log(
         `[FUND] Revenue share: sent ${formatAda(share)} to ` +
@@ -205,7 +193,7 @@ export async function sendRemainderToAdmin(
   }
 
   try {
-    const amountStr = lovelaceToStr(hotBal.adaBalance);
+    const amountStr = formatAda(hotBal.adaBalance, false);
     await executeSend(amountStr, "ada", "hot", "admin", book);
     console.log(`[FUND] Remainder: sent ${formatAda(hotBal.adaBalance)} to admin`);
   } catch (err) {
