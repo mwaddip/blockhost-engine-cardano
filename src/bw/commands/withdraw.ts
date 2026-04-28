@@ -17,6 +17,10 @@
 
 import type { Addressbook } from "../../fund-manager/types.js";
 import type { SubscriptionDatum } from "../../cardano/types.js";
+import {
+  decodeSubscriptionDatumFromCbor,
+  encodeSubscriptionDatum,
+} from "../../cardano/datum-codec.js";
 import { resolveAddress } from "../cli-utils.js";
 import { loadWeb3Config } from "../../fund-manager/web3-config.js";
 import { getProvider } from "@mwaddip/cmttk";
@@ -31,60 +35,6 @@ import type { Utxo, ScriptInput, TxOutput, MintEntry, Assets } from "@mwaddip/cm
 import * as fs from "fs";
 import { PLUTUS_JSON_PATH } from "../../paths.js";
 const MAX_BATCH = 15; // max UTXOs per transaction to stay within limits
-
-// ── Datum codec ──────────────────────────────────────────────────────────────
-
-/**
- * Decode a SubscriptionDatum from CBOR hex (inline datum).
- */
-function decodeSubscriptionDatum(cborHex: string): SubscriptionDatum | null {
-  try {
-    const d = Data.from(cborHex);
-    if (!(d instanceof Constr) || d.index !== 0 || d.fields.length < 11) {
-      return null;
-    }
-    const f = d.fields;
-    const paymentAssetConstr = f[7] as Constr;
-    return {
-      planId: Number(f[0] as bigint),
-      expiry: f[1] as bigint,
-      subscriber: f[2] as string,
-      amountRemaining: f[3] as bigint,
-      ratePerInterval: f[4] as bigint,
-      intervalMs: f[5] as bigint,
-      lastCollected: f[6] as bigint,
-      paymentAsset: {
-        policyId: paymentAssetConstr.fields[0] as string,
-        assetName: paymentAssetConstr.fields[1] as string,
-      },
-      beaconId: f[8] as string,
-      userEncrypted: f[9] as string,
-      creationHeight: f[10] as bigint,
-    };
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Encode a SubscriptionDatum to CBOR hex for the continuing output.
- */
-function encodeSubscriptionDatum(datum: SubscriptionDatum): string {
-  const d = new Constr(0, [
-    BigInt(datum.planId),
-    datum.expiry,
-    datum.subscriber,
-    datum.amountRemaining,
-    datum.ratePerInterval,
-    datum.intervalMs,
-    datum.lastCollected,
-    new Constr(0, [datum.paymentAsset.policyId, datum.paymentAsset.assetName]),
-    datum.beaconId,
-    datum.userEncrypted,
-    datum.creationHeight,
-  ]);
-  return Data.to(d);
-}
 
 // ── Claimability logic ───────────────────────────────────────────────────────
 
@@ -107,7 +57,7 @@ function analyzeClaimable(
   validFromMs: bigint,
 ): ClaimableInfo | null {
   if (!datumCbor) return null;
-  const datum = decodeSubscriptionDatum(datumCbor);
+  const datum = decodeSubscriptionDatumFromCbor(datumCbor);
   if (!datum) return null;
 
   if (datum.amountRemaining <= 0n) return null;

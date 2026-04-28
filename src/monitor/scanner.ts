@@ -18,6 +18,8 @@
 import type { CardanoProvider } from "@mwaddip/cmttk";
 import type { CardanoNetwork } from "../cardano/types.js";
 import type { SubscriptionDatum } from "../cardano/types.js";
+import type { PlutusValue } from "../cardano/datum-codec.js";
+import { decodeSubscriptionDatumFromPlutus } from "../cardano/datum-codec.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -44,25 +46,6 @@ export interface ScanDiff {
   /** Same beacon, different UTXO ref — subscriber extended via spend-and-recreate */
   extended: { old: TrackedSubscription; new: TrackedSubscription }[];
 }
-
-// ── Plutus inline datum shapes returned by Blockfrost ────────────────────────
-//
-// Blockfrost encodes inline datums as JSON-decoded Plutus data, not raw CBOR.
-// A constructor term looks like: { "constructor": N, "fields": [...] }
-// A primitive integer looks like: { "int": N }
-// A primitive bytestring looks like: { "bytes": "hexstring" }
-
-interface PlutusConstr {
-  constructor: number;
-  fields: PlutusValue[];
-}
-
-type PlutusValue =
-  | PlutusConstr
-  | { int: number | string }
-  | { bytes: string }
-  | { list: PlutusValue[] }
-  | { map: { k: PlutusValue; v: PlutusValue }[] };
 
 // ── Testing mode ─────────────────────────────────────────────────────────────
 
@@ -365,129 +348,12 @@ export function getKnownSubscriptions(): Map<string, TrackedSubscription> {
 // ── Datum parsing ─────────────────────────────────────────────────────────────
 //
 // Blockfrost returns inline_datum as a JSON-decoded Plutus data tree.
-// Our SubscriptionDatum validator is a constructor 0 record with fields in the
-// order they appear in the Aiken type definition:
-//
-//   Constr 0 [
-//     planId         : Int          → { int: N }
-//     expiry         : Int          → { int: N }  (POSIX ms)
-//     subscriber     : Bytes        → { bytes: hex }  (bech32 payment key hash)
-//     amountRemaining: Int          → { int: N }
-//     ratePerInterval: Int          → { int: N }
-//     intervalMs     : Int          → { int: N }  (POSIX ms)
-//     lastCollected  : Int          → { int: N }  (POSIX ms)
-//     paymentAsset   : Constr 0 [ policyId: Bytes, assetName: Bytes ]
-//     beaconId       : Bytes        → { bytes: hex }
-//     userEncrypted  : Bytes        → { bytes: hex }
-//     creationHeight : Int          → { int: N }
-//   ]
-//
-// If Blockfrost returns inline_datum as null (datum is referenced by hash, not
-// inlined), we cannot parse it here and return null to skip the UTXO.
+// If inline_datum is null (datum is referenced by hash, not inlined), we
+// cannot parse it here and return null to skip the UTXO.
+// The schema layout lives in src/cardano/datum-codec.ts.
 
 function parseDatumFromUtxo(utxo: BlockfrostUtxo): SubscriptionDatum | null {
-  const raw = utxo.inline_datum;
-  if (!raw) return null;
-
-  try {
-    // Top-level must be constructor 0
-    if (!isConstr(raw) || raw.constructor !== 0) return null;
-
-    const f = raw.fields;
-    // Expect at least 11 fields (10 original + creation_height)
-    if (!f || f.length < 11) return null;
-
-    const [f0, f1, f2, f3, f4, f5, f6, f7, f8, f9, f10] = f as [
-      PlutusValue, PlutusValue, PlutusValue, PlutusValue, PlutusValue,
-      PlutusValue, PlutusValue, PlutusValue, PlutusValue, PlutusValue,
-      PlutusValue,
-    ];
-
-    const planId = intField(f0);
-    if (planId === null) return null;
-
-    const expiry = bigIntField(f1);
-    if (expiry === null) return null;
-
-    const subscriber = bytesField(f2);
-    if (subscriber === null) return null;
-
-    const amountRemaining = bigIntField(f3);
-    if (amountRemaining === null) return null;
-
-    const ratePerInterval = bigIntField(f4);
-    if (ratePerInterval === null) return null;
-
-    const intervalMs = bigIntField(f5);
-    if (intervalMs === null) return null;
-
-    const lastCollected = bigIntField(f6);
-    if (lastCollected === null) return null;
-
-    // paymentAsset is Constr 0 [ policyId: Bytes, assetName: Bytes ]
-    if (!isConstr(f7) || f7.constructor !== 0 || f7.fields.length < 2) return null;
-    const policyId = bytesField(f7.fields[0] as PlutusValue);
-    const assetName = bytesField(f7.fields[1] as PlutusValue);
-    if (policyId === null || assetName === null) return null;
-
-    const beaconId = bytesField(f8);
-    if (beaconId === null) return null;
-
-    const userEncrypted = bytesField(f9);
-    if (userEncrypted === null) return null;
-
-    const creationHeight = bigIntField(f10);
-    if (creationHeight === null) return null;
-
-    return {
-      planId: Number(planId),
-      expiry,
-      subscriber,
-      amountRemaining,
-      ratePerInterval,
-      intervalMs,
-      lastCollected,
-      paymentAsset: { policyId, assetName },
-      beaconId,
-      userEncrypted,
-      creationHeight,
-    };
-  } catch {
-    return null;
-  }
+  if (!utxo.inline_datum) return null;
+  return decodeSubscriptionDatumFromPlutus(utxo.inline_datum);
 }
-
-// ── Plutus field accessors ────────────────────────────────────────────────────
-
-function isConstr(v: PlutusValue): v is PlutusConstr {
-  return typeof v === "object" && v !== null && "constructor" in v;
-}
-
-function intField(v: PlutusValue): number | null {
-  if (typeof v === "object" && v !== null && "int" in v) {
-    const n = Number(v.int);
-    return Number.isFinite(n) ? n : null;
-  }
-  return null;
-}
-
-function bigIntField(v: PlutusValue): bigint | null {
-  if (typeof v === "object" && v !== null && "int" in v) {
-    try {
-      return BigInt(v.int);
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
-
-function bytesField(v: PlutusValue): string | null {
-  if (typeof v === "object" && v !== null && "bytes" in v) {
-    return typeof v.bytes === "string" ? v.bytes : null;
-  }
-  return null;
-}
-
-// ── Utility ───────────────────────────────────────────────────────────────────
 
