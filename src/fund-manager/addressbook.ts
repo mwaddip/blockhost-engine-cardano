@@ -7,11 +7,12 @@
 
 import * as fs from "fs";
 import type { Addressbook } from "./types.js";
-import { isValidAddress, normalizeAddress } from "@mwaddip/cmttk";
+import { isValidAddress, normalizeAddress, deriveWallet } from "@mwaddip/cmttk";
 import {
   generateWallet as rootAgentGenerateWallet,
   addressbookSave,
 } from "../root-agent/client.js";
+import { loadNetworkConfig } from "./web3-config.js";
 import { ADDRESSBOOK_PATH, CONFIG_DIR } from "../paths.js";
 
 const HOT_KEY_PATH = `${CONFIG_DIR}/hot.key`;
@@ -102,8 +103,6 @@ export async function ensureHotWallet(book: Addressbook): Promise<Addressbook> {
   if (fs.existsSync(HOT_KEY_PATH)) {
     console.log("[FUND] Hot wallet key exists, deriving address...");
     const mnemonic = fs.readFileSync(HOT_KEY_PATH, "utf8").trim();
-    const { deriveWallet } = await import("cmttk");
-    const { loadNetworkConfig } = await import("./web3-config.js");
     const { network } = loadNetworkConfig();
     const wallet = await deriveWallet(mnemonic, network);
 

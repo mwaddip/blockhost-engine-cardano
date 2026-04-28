@@ -17,9 +17,8 @@ import { spawnSync } from "child_process";
 import { getCommand } from "../provisioner.js";
 import { loadFundManagerConfig, loadRevenueShareConfig } from "./config.js";
 import { loadState, updateState } from "./state.js";
-import { loadWeb3Config } from "./web3-config.js";
 import { loadAddressbook, ensureHotWallet } from "./addressbook.js";
-import { runFundCycle as collectSubscriptions } from "./withdrawal.js";
+import { executeWithdraw } from "../bw/commands/withdraw.js";
 import { ensureCollateral } from "./collateral.js";
 import {
   topUpHotWalletGas,
@@ -120,8 +119,6 @@ export async function runFundManager(): Promise<void> {
       return;
     }
 
-    const web3Config = loadWeb3Config();
-
     console.log("[FUND] Starting fund cycle...");
 
     // Load addressbook and ensure hot wallet exists
@@ -138,12 +135,7 @@ export async function runFundManager(): Promise<void> {
 
     // Step 1: Batch-collect subscription UTXOs to hot wallet
     try {
-      await collectSubscriptions(
-        book,
-        config,
-        web3Config.subscriptionValidatorAddress,
-        web3Config.beaconPolicyId,
-      );
+      await executeWithdraw("hot", book);
     } catch (err) {
       console.error(`[FUND] Step 1 (collection) failed: ${err}`);
     }

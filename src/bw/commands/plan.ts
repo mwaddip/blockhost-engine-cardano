@@ -55,7 +55,7 @@ function encodePlanDatum(
 
 // ── Auto-increment plan ID ───────────────────────────────────────────────────
 
-function getNextPlanId(): number {
+async function getNextPlanId(): Promise<number> {
   const counterPath = `${STATE_DIR}/next-plan-id`;
   const lockPath = counterPath + ".lock";
   fs.mkdirSync(STATE_DIR, { recursive: true });
@@ -73,8 +73,7 @@ function getNextPlanId(): number {
         } catch { /* give up */ }
         break;
       }
-      const deadline = Date.now() + 100;
-      while (Date.now() < deadline) {}
+      await new Promise((r) => setTimeout(r, 100));
     }
   }
 
@@ -182,7 +181,7 @@ async function planCreateCommand(
   const provider = getProvider(network, blockfrostProjectId || undefined, koiosUrl || undefined);
 
   // Persistent auto-increment plan ID
-  const planId = getNextPlanId();
+  const planId = await getNextPlanId();
 
   // Encode the datum
   const datumCbor = encodePlanDatum(planId, name, pricePerDay, acceptedAssets, true);

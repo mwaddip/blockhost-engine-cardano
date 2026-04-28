@@ -113,7 +113,7 @@ cleanup(os.environ['VM_NAME'], os.environ['NETWORK_MODE'])
  * Starts at 1 if the file does not exist.
  * File contains a plain decimal integer (no trailing newline required).
  */
-function allocateVmId(): number {
+async function allocateVmId(): Promise<number> {
   fs.mkdirSync(STATE_DIR, { recursive: true });
   const lockPath = NEXT_VM_ID_FILE + ".lock";
 
@@ -132,8 +132,7 @@ function allocateVmId(): number {
         } catch { /* give up */ }
         break;
       }
-      const deadline = Date.now() + 100;
-      while (Date.now() < deadline) {} // brief spin
+      await new Promise((r) => setTimeout(r, 100));
     }
   }
 
@@ -337,7 +336,7 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
     return;
   }
 
-  const vmId = allocateVmId();
+  const vmId = await allocateVmId();
   const vmName = formatVmName(vmId);
   const expiryDays = calculateExpiryDays(datum.expiry, BigInt(Date.now()));
 

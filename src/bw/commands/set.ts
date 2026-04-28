@@ -14,7 +14,7 @@ import { getPaymentKeyHash } from "@mwaddip/cmttk";
 import { Constr, Data } from "@mwaddip/cmttk";
 import { parseKoiosUtxos, buildAndSubmitScriptTx } from "@mwaddip/cmttk";
 import type { Utxo, Assets } from "@mwaddip/cmttk";
-import { hexToBytes, bytesToHex, cborArray, cborBytes, decodeCbor } from "@mwaddip/cmttk";
+import { hexToBytes, bytesToHex, cborArray, cborBytes, decodeCbor, addressToHex } from "@mwaddip/cmttk";
 import { referenceTokenAssetName } from "../../nft/mint.js";
 import * as fs from "fs";
 import { CONFIG_DIR, MIN_ADA_FOR_TOKEN_OUTPUT } from "../../paths.js";
@@ -192,7 +192,6 @@ async function setEncryptCommand(
   console.error(`Found at ${refUtxo.txHash}#${refUtxo.index}`);
 
   // Determine if this is a script address (header nibble 0x1 or 0x3 = script payment)
-  const { addressToHex } = await import("cmttk");
   const addrHex = addressToHex(refAddress);
   const headerByte = parseInt(addrHex.slice(0, 2), 16);
   const addrType = (headerByte >> 4) & 0x0f;
