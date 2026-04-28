@@ -35,7 +35,28 @@ export interface TrackedSubscription {
   utxo: unknown;
   /** Unix ms timestamp when this UTXO was first observed */
   firstSeen: number;
+  /**
+   * True if this entry was restored from vms.json without a real datum.
+   * Placeholders exist only to suppress re-creation events on restart;
+   * datum fields are zeroed sentinels — never compute on them.
+   */
+  placeholder?: true;
 }
+
+/** Sentinel datum used for restored placeholders (never inspected). */
+const PLACEHOLDER_DATUM: SubscriptionDatum = {
+  planId: 0,
+  expiry: 0n,
+  subscriber: "",
+  amountRemaining: 0n,
+  ratePerInterval: 0n,
+  intervalMs: 0n,
+  lastCollected: 0n,
+  paymentAsset: { policyId: "", assetName: "" },
+  beaconId: "",
+  userEncrypted: "",
+  creationHeight: 0n,
+};
 
 /** What changed between two consecutive scans */
 export interface ScanDiff {
@@ -98,13 +119,16 @@ function loadKnownBeacons(): void {
       const entry = vm as Record<string, unknown>;
       const beaconName = entry["beacon_name"] as string | undefined;
       if (beaconName) {
-        // Insert a placeholder to mark this beacon as already processed
+        // Insert a placeholder to mark this beacon as already processed.
+        // Placeholders carry no real datum — the diff stage skips extension
+        // emission for them so we never compute against the sentinel.
         knownSubscriptions.set(beaconName, {
           utxoRef: entry["utxo_ref"] as string ?? "restored",
           beaconName,
-          datum: {} as any,
+          datum: PLACEHOLDER_DATUM,
           utxo: null,
           firstSeen: 0,
+          placeholder: true,
         });
       }
     }
@@ -274,6 +298,10 @@ export async function scanBeacons(
     const known = knownSubscriptions.get(name);
     if (!known) {
       diff.created.push(current);
+    } else if (known.placeholder) {
+      // First post-restart observation. We have no old datum to compute the
+      // extension delta against — silently adopt the real entry. The next
+      // scan will catch real extensions normally.
     } else if (known.utxoRef !== current.utxoRef) {
       diff.extended.push({ old: known, new: current });
     }
