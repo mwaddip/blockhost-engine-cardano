@@ -27,7 +27,7 @@ import { getCommand } from "../provisioner.js";
 import { isFundCycleInProgress } from "../fund-manager/index.js";
 import { loadNetworkConfig } from "../fund-manager/web3-config.js";
 import { allocateCounter } from "../state/counter.js";
-import { STATE_DIR, VMS_JSON_PATH, CONFIG_DIR, PYTHON_TIMEOUT_MS } from "../paths.js";
+import { STATE_DIR, CONFIG_DIR, PYTHON_TIMEOUT_MS } from "../paths.js";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const SSH_PORT = 22;
@@ -264,6 +264,35 @@ db.set_nft_minted(os.environ['VM_NAME'], int(os.environ['NFT_TOKEN_ID']))
   }
 }
 
+/**
+ * Record beacon_name and utxo_ref on a VM entry so the scanner can skip
+ * the beacon on restart. Goes through vm_db's lockfile to avoid racing the
+ * reconciler and other writers (set_nft_minted, extend_expiry).
+ */
+function updateBeaconInfo(vmName: string, beaconName: string, utxoRef: string): void {
+  const script = `
+import os
+from blockhost.vm_db import get_database
+db = get_database()
+db.update_beacon_info(
+    os.environ['VM_NAME'],
+    os.environ['BEACON_NAME'],
+    os.environ['UTXO_REF'],
+)
+`;
+  const result = spawnSync("python3", ["-c", script], {
+    cwd: STATE_DIR,
+    timeout: PYTHON_TIMEOUT_MS,
+    env: { ...process.env, VM_NAME: vmName, BEACON_NAME: beaconName, UTXO_REF: utxoRef },
+  });
+  if (result.status !== 0) {
+    const errMsg = result.stderr ? result.stderr.toString().trim() : "";
+    console.warn(
+      `[WARN] Failed to record beacon info for ${vmName}${errMsg ? ": " + errMsg : ""}`,
+    );
+  }
+}
+
 // ── VM lifecycle helpers ──────────────────────────────────────────────────────
 
 async function destroyVm(vmName: string): Promise<{ success: boolean; output: string }> {
@@ -359,20 +388,9 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
 
   console.log(`[OK] VM ${vmName} provisioned successfully`);
 
-  // Save beacon name to vms.json so the scanner can skip it on restart
-  try {
-    const dbPath = VMS_JSON_PATH;
-    if (fs.existsSync(dbPath)) {
-      const db = JSON.parse(fs.readFileSync(dbPath, "utf8"));
-      if (db.vms?.[vmName]) {
-        db.vms[vmName].beacon_name = beaconName;
-        db.vms[vmName].utxo_ref = utxoRef;
-        fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
-      }
-    }
-  } catch {
-    // Non-fatal — scanner will re-detect but provisioner will skip existing VM
-  }
+  // Save beacon name to vms.json so the scanner can skip it on restart.
+  // Non-fatal — scanner will re-detect but provisioner will skip existing VM.
+  updateBeaconInfo(vmName, beaconName, utxoRef);
 
   // Step 3: Parse JSON summary from provisioner stdout
   const summary = parseVmSummary(createResult.stdout);
