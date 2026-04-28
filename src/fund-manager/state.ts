@@ -12,7 +12,6 @@ const STATE_DIR = path.dirname(STATE_FILE);
 
 const DEFAULT_STATE: FundManagerState = {
   last_fund_cycle: 0,
-  last_gas_check: 0,
   last_collateral_check: 0,
   hot_wallet_generated: false,
 };

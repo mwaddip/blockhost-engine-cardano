@@ -4,17 +4,13 @@
 
 export interface FundManagerState {
   last_fund_cycle: number;        // ms timestamp
-  last_gas_check: number;         // ms timestamp (kept for compat, less relevant on Cardano)
   last_collateral_check: number;  // ms timestamp
   hot_wallet_generated: boolean;
 }
 
 export interface FundManagerConfig {
   fund_cycle_interval_hours: number;
-  gas_check_interval_minutes: number;
   min_withdrawal_lovelace: bigint;
-  gas_low_threshold_lovelace: bigint;
-  gas_swap_amount_lovelace: bigint;
   server_stablecoin_buffer_lovelace: bigint;
   hot_wallet_gas_lovelace: bigint;
 }

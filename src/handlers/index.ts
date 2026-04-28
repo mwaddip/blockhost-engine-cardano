@@ -480,9 +480,9 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
   // Step 7: Update GECOS with actual token ID
   // Wait for the guest agent to start — the VM was just created and may
   // still be booting.  Retry a few times with delays.
+  // Not fatal if GECOS failed — reconciler will retry on next cycle
   const gecosCmd = getCommand("update-gecos");
   const gecosArgs = [vmName, datum.subscriber, "--nft-id", String(actualTokenId)];
-  let gecosUpdated = false;
   for (let attempt = 1; attempt <= 4; attempt++) {
     if (attempt > 1) {
       console.log(`[INFO] Waiting for guest agent (attempt ${attempt}/4)...`);
@@ -491,7 +491,6 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
     const gecosResult = spawnSync(gecosCmd, gecosArgs, { timeout: 30_000, cwd: STATE_DIR });
     if (gecosResult.status === 0) {
       console.log(`[OK] GECOS updated for ${vmName}`);
-      gecosUpdated = true;
       break;
     }
     if (attempt === 4) {
@@ -499,8 +498,6 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
       console.error(`[WARN] update-gecos failed for ${vmName} after ${attempt} attempts${errMsg ? ": " + errMsg : ""}`);
     }
   }
-  // Not fatal if GECOS failed — reconciler will retry on next cycle
-  void gecosUpdated;
 
   // Step 8: Mark NFT minted in database
   markNftMinted(vmName, actualTokenId);

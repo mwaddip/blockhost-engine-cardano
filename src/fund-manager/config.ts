@@ -15,10 +15,7 @@ const REVENUE_SHARE_PATH = `${CONFIG_DIR}/revenue-share.json`;
 
 const DEFAULTS: FundManagerConfig = {
   fund_cycle_interval_hours: 24,
-  gas_check_interval_minutes: 30,
   min_withdrawal_lovelace: 50_000_000n,              // 50 ADA
-  gas_low_threshold_lovelace: 5_000_000n,            // 5 ADA — triggers warning
-  gas_swap_amount_lovelace: 10_000_000n,             // 10 ADA — target swap amount
   server_stablecoin_buffer_lovelace: 5_000_000n,     // stablecoin buffer in token base units
   hot_wallet_gas_lovelace: 5_000_000n,               // 5 ADA — target hot wallet ADA balance
 };
@@ -49,19 +46,9 @@ export function loadFundManagerConfig(): FundManagerConfig {
     return {
       fund_cycle_interval_hours:
         (fm.fund_cycle_interval_hours as number) || DEFAULTS.fund_cycle_interval_hours,
-      gas_check_interval_minutes:
-        (fm.gas_check_interval_minutes as number) || DEFAULTS.gas_check_interval_minutes,
       min_withdrawal_lovelace: safeBigInt(
         fm.min_withdrawal_lovelace,
         DEFAULTS.min_withdrawal_lovelace,
-      ),
-      gas_low_threshold_lovelace: safeBigInt(
-        fm.gas_low_threshold_lovelace,
-        DEFAULTS.gas_low_threshold_lovelace,
-      ),
-      gas_swap_amount_lovelace: safeBigInt(
-        fm.gas_swap_amount_lovelace,
-        DEFAULTS.gas_swap_amount_lovelace,
       ),
       server_stablecoin_buffer_lovelace: safeBigInt(
         fm.server_stablecoin_buffer_lovelace,

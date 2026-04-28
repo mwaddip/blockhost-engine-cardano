@@ -39,12 +39,11 @@ const testingMode = fs.existsSync(TESTING_MODE_FILE);
 /**
  * Check if the fund cycle is due to run based on its configured interval.
  *
- * Testing mode: runs every 30 seconds instead of the configured interval.
+ * Testing mode: runs every 10 minutes instead of the configured interval.
  */
 export function shouldRunFundCycle(): boolean {
   const state = loadState();
   if (testingMode) {
-    // Run every 10 minutes in testing mode
     return Date.now() - state.last_fund_cycle >= 600_000;
   }
   const config = loadFundManagerConfig();

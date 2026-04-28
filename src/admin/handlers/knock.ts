@@ -35,14 +35,6 @@ function isValidIP(addr: string): boolean {
   return net.isIP(addr) !== 0;
 }
 
-/**
- * Validate an IPv6 address (basic format check)
- */
-function isValidIPv6(addr: string): boolean {
-  if (!addr || /\s/.test(addr)) return false;
-  return net.isIPv6(addr);
-}
-
 // --- Active File Helpers ---
 
 function writeActiveFile(ip: string): void {
@@ -344,7 +336,7 @@ export async function executeKnock(
 
   // Validate optional source IPv6 address
   const source = params.source;
-  if (source && !isValidIPv6(source)) {
+  if (source && (/\s/.test(source) || !net.isIPv6(source))) {
     return {
       success: false,
       message: `Invalid IPv6 source address: ${source}`,
