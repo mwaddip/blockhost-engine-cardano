@@ -16,6 +16,7 @@ import { Constr, Data, fromText } from "@mwaddip/cmttk";
 import { buildAndSubmitScriptTx } from "@mwaddip/cmttk";
 import * as fs from "fs";
 import * as yaml from "js-yaml";
+import { allocateCounter } from "../../state/counter.js";
 import { CONFIG_DIR, STATE_DIR, MIN_ADA_FOR_TOKEN_OUTPUT } from "../../paths.js";
 
 // ── Datum encoding ───────────────────────────────────────────────────────────
@@ -51,45 +52,6 @@ function encodePlanDatum(
     activeBool,
   ]);
   return Data.to(d);
-}
-
-// ── Auto-increment plan ID ───────────────────────────────────────────────────
-
-async function getNextPlanId(): Promise<number> {
-  const counterPath = `${STATE_DIR}/next-plan-id`;
-  const lockPath = counterPath + ".lock";
-  fs.mkdirSync(STATE_DIR, { recursive: true });
-
-  let lockFd = -1;
-  for (let i = 0; i < 50; i++) {
-    try {
-      lockFd = fs.openSync(lockPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY);
-      break;
-    } catch {
-      if (i === 49) {
-        try { fs.unlinkSync(lockPath); } catch {}
-        try {
-          lockFd = fs.openSync(lockPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY);
-        } catch { /* give up */ }
-        break;
-      }
-      await new Promise((r) => setTimeout(r, 100));
-    }
-  }
-
-  try {
-    let current = 1;
-    try {
-      const raw = fs.readFileSync(counterPath, "utf8").trim();
-      const parsed = parseInt(raw, 10);
-      if (!isNaN(parsed) && parsed > 0) current = parsed;
-    } catch { /* file doesn't exist — start at 1 */ }
-    fs.writeFileSync(counterPath, String(current + 1), "utf8");
-    return current;
-  } finally {
-    if (lockFd >= 0) try { fs.closeSync(lockFd); } catch {}
-    try { fs.unlinkSync(lockPath); } catch {}
-  }
 }
 
 // ── CLI handler ──────────────────────────────────────────────────────────────
@@ -181,7 +143,7 @@ async function planCreateCommand(
   const provider = getProvider(network, blockfrostProjectId || undefined, koiosUrl || undefined);
 
   // Persistent auto-increment plan ID
-  const planId = await getNextPlanId();
+  const planId = await allocateCounter(`${STATE_DIR}/next-plan-id`);
 
   // Encode the datum
   const datumCbor = encodePlanDatum(planId, name, pricePerDay, acceptedAssets, true);

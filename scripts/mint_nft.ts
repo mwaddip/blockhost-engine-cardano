@@ -31,6 +31,7 @@ import { userTokenAssetName, referenceTokenAssetName } from "../src/nft/mint.js"
 import type { CardanoNetwork } from "../src/cardano/types.js";
 import type { Assets } from "@mwaddip/cmttk";
 
+import { allocateCounter } from "../src/state/counter.js";
 import { CONFIG_DIR, STATE_DIR } from "../src/paths.js";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -146,46 +147,6 @@ function loadMnemonic(): string {
   return fs.readFileSync(KEY_PATH, "utf8").trim();
 }
 
-// ── Token ID counter ──────────────────────────────────────────────────────────
-
-function allocateTokenId(): number {
-  fs.mkdirSync(STATE_DIR, { recursive: true });
-  const lockPath = COUNTER_PATH + ".lock";
-
-  let lockFd = -1;
-  for (let i = 0; i < 50; i++) {
-    try {
-      lockFd = fs.openSync(lockPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY);
-      break;
-    } catch {
-      if (i === 49) {
-        try { fs.unlinkSync(lockPath); } catch {}
-        try {
-          lockFd = fs.openSync(lockPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY);
-        } catch { /* give up */ }
-        break;
-      }
-      const deadline = Date.now() + 100;
-      while (Date.now() < deadline) {}
-    }
-  }
-
-  try {
-    let current = 1;
-    try {
-      const raw = fs.readFileSync(COUNTER_PATH, "utf8").trim();
-      const parsed = parseInt(raw, 10);
-      if (!isNaN(parsed) && parsed > 0) current = parsed;
-    } catch {}
-
-    fs.writeFileSync(COUNTER_PATH, String(current + 1), { encoding: "utf8" });
-    return current;
-  } finally {
-    if (lockFd >= 0) try { fs.closeSync(lockFd); } catch {}
-    try { fs.unlinkSync(lockPath); } catch {}
-  }
-}
-
 // ── Blueprint loading ──────────────────────────────────────────────────────
 
 function loadNftCompiledCode(): string {
@@ -264,7 +225,7 @@ async function main(): Promise<void> {
   }
 
   // Allocate token ID and compute CIP-68 asset names
-  const tokenId = allocateTokenId();
+  const tokenId = await allocateCounter(COUNTER_PATH);
   const userAssetName = userTokenAssetName(tokenId);
   const refAssetName  = referenceTokenAssetName(tokenId);
 

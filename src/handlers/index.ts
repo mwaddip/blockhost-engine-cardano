@@ -23,6 +23,7 @@ import * as fs from "node:fs";
 import type { TrackedSubscription } from "../monitor/scanner.js";
 import { eciesDecrypt, symmetricEncrypt, loadServerPrivateKey } from "../crypto.js";
 import { getCommand } from "../provisioner.js";
+import { allocateCounter } from "../state/counter.js";
 import { STATE_DIR, VMS_JSON_PATH, CONFIG_DIR, PYTHON_TIMEOUT_MS } from "../paths.js";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -107,52 +108,6 @@ cleanup(os.environ['VM_NAME'], os.environ['NETWORK_MODE'])
 }
 
 // ── VM ID counter ─────────────────────────────────────────────────────────────
-
-/**
- * Read the next VM ID from disk, increment, and persist.
- * Starts at 1 if the file does not exist.
- * File contains a plain decimal integer (no trailing newline required).
- */
-async function allocateVmId(): Promise<number> {
-  fs.mkdirSync(STATE_DIR, { recursive: true });
-  const lockPath = NEXT_VM_ID_FILE + ".lock";
-
-  // Acquire exclusive lock via O_EXCL
-  let lockFd = -1;
-  for (let i = 0; i < 50; i++) {
-    try {
-      lockFd = fs.openSync(lockPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY);
-      break;
-    } catch {
-      if (i === 49) {
-        // Stale lock from crashed process — force acquire
-        try { fs.unlinkSync(lockPath); } catch {}
-        try {
-          lockFd = fs.openSync(lockPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY);
-        } catch { /* give up */ }
-        break;
-      }
-      await new Promise((r) => setTimeout(r, 100));
-    }
-  }
-
-  try {
-    let current = 1;
-    try {
-      const raw = fs.readFileSync(NEXT_VM_ID_FILE, "utf8").trim();
-      const parsed = parseInt(raw, 10);
-      if (!isNaN(parsed) && parsed > 0) current = parsed;
-    } catch {
-      // File does not exist — start at 1
-    }
-
-    fs.writeFileSync(NEXT_VM_ID_FILE, String(current + 1), "utf8");
-    return current;
-  } finally {
-    if (lockFd >= 0) try { fs.closeSync(lockFd); } catch {}
-    try { fs.unlinkSync(lockPath); } catch {}
-  }
-}
 
 /**
  * Format a VM ID as a VM name: blockhost-001, blockhost-042, etc.
@@ -336,7 +291,7 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
     return;
   }
 
-  const vmId = await allocateVmId();
+  const vmId = await allocateCounter(NEXT_VM_ID_FILE);
   const vmName = formatVmName(vmId);
   const expiryDays = calculateExpiryDays(datum.expiry, BigInt(Date.now()));
 
