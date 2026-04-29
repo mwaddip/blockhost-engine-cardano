@@ -4,22 +4,24 @@
  * Adapts the OPNet handler pipeline for Cardano's beacon-based detection model.
  * Input is TrackedSubscription (from the beacon scanner), not a contract event.
  *
- * Pipeline for new subscriptions (8 steps):
+ * Pipeline for new subscriptions:
  *   1. Decrypt userEncrypted from datum (ECIES with server key)
  *   2. Call provisioner create with --owner-wallet and --expiry-days
- *   3. Parse JSON summary from provisioner stdout, resolve host via network hook
- *   4. Encrypt connection details with user signature (SHAKE256 + AES-GCM)
- *   5. Call blockhost-mint-nft with --owner-wallet and --user-encrypted
- *   6. Parse token ID from mint stdout
- *   7. Call provisioner update-gecos with VM name, wallet, NFT token ID
- *   8. Mark NFT minted in database (Python subprocess)
+ *   3. Parse JSON summary from provisioner stdout
+ *   4. Resolve subscriber-facing host via `blockhost-network-hook public-address`
+ *   5. Encrypt connection details with user signature (SHAKE256 + AES-GCM)
+ *   6. Call blockhost-mint-nft → token_id
+ *   7. Push VM-side config via `blockhost-network-hook push-vm-config`
+ *   8. Call provisioner update-gecos with VM name, wallet, NFT token ID
+ *   9. Mark NFT minted in database
  *
- * The engine is network-mode-agnostic: step 3's network hook call returns
- * an IPv6 (broker), static IP (manual), or .onion (onion) as appropriate.
+ * Network-mode awareness lives in the dispatcher (`blockhost-network-hook`)
+ * and its plugins. The engine never branches on broker/manual/onion and never
+ * reads any active-mode config file. Step 4 returns whatever the active
+ * plugin produces; step 7 is best-effort with reconciler retry.
  */
 
 import { spawn, spawnSync } from "child_process";
-import * as fs from "node:fs";
 import { bech32 } from "bech32";
 import type { TrackedSubscription } from "../monitor/scanner.js";
 import { eciesDecrypt, symmetricEncrypt, loadServerPrivateKey } from "../crypto.js";
@@ -27,55 +29,34 @@ import { getCommand } from "../provisioner.js";
 import { isFundCycleInProgress } from "../fund-manager/index.js";
 import { loadNetworkConfig } from "../fund-manager/web3-config.js";
 import { allocateCounter } from "../state/counter.js";
-import { STATE_DIR, CONFIG_DIR, PYTHON_TIMEOUT_MS } from "../paths.js";
+import { STATE_DIR, PYTHON_TIMEOUT_MS } from "../paths.js";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const SSH_PORT = 22;
 const NEXT_VM_ID_FILE = `${STATE_DIR}/next-vm-id`;
-const NETWORK_MODE_PATH = `${CONFIG_DIR}/network-mode`;
+const GUEST_EXEC_TIMEOUT_MS = 30_000;
 
-// ── Network mode ──────────────────────────────────────────────────────────────
-
-/**
- * Read the active network mode from /etc/blockhost/network-mode.
- * Valid values: "broker" | "manual" | "onion". Defaults to "broker" when
- * the file is absent or contains an unrecognized value.
- */
-function readNetworkMode(): string {
-  try {
-    const raw = fs.readFileSync(NETWORK_MODE_PATH, "utf8").trim();
-    if (raw === "broker" || raw === "manual" || raw === "onion") return raw;
-    console.warn(`[WARN] Invalid network mode "${raw}" in ${NETWORK_MODE_PATH} — defaulting to broker`);
-  } catch {
-    // File absent — backwards compatibility: broker
-  }
-  return "broker";
-}
-
-/** Active network mode, resolved once at module startup. */
-const NETWORK_MODE = readNetworkMode();
-
-// ── Network hook (Python bridge) ──────────────────────────────────────────────
+// ── Network hook dispatcher ───────────────────────────────────────────────────
 
 /**
- * Resolve the subscriber-facing connection endpoint for a VM.
+ * Resolve the subscriber-facing host for a VM via the network-hook dispatcher.
  *
- * Calls the blockhost-network-hook CLI:
- *   broker  → IPv6 from broker-allocation.json
- *   manual  → static IP from config
- *   onion   → .onion address (creates hidden service, pushes into VM)
- *
- * Returns the resolved host on success, or null on failure.
+ * The dispatcher reads `vm-db.network_mode[<vm>]` and forwards to the plugin's
+ * `public-address` command. Returns the host string on success, or null on
+ * non-zero exit / empty output. Engines treat null as a hard failure — no
+ * fallback to bridge IP, since that would mint NFTs with garbage data.
  */
-function getConnectionEndpoint(vmName: string, bridgeIp: string, mode: string): string | null {
+function resolvePublicAddress(vmName: string): string | null {
   const result = spawnSync(
     "blockhost-network-hook",
-    ["resolve", vmName, bridgeIp, mode],
+    ["public-address", vmName],
     { timeout: PYTHON_TIMEOUT_MS, encoding: "utf8" },
   );
   if (result.status !== 0) {
     const errMsg = (result.stderr ?? "").toString().trim();
-    console.error(`[ERROR] network-hook resolve failed: ${errMsg || `exit ${String(result.status)}`}`);
+    console.error(
+      `[ERROR] blockhost-network-hook public-address failed for ${vmName}: ${errMsg || `exit ${String(result.status)}`}`,
+    );
     return null;
   }
   const host = (result.stdout ?? "").toString().trim();
@@ -83,18 +64,61 @@ function getConnectionEndpoint(vmName: string, bridgeIp: string, mode: string): 
 }
 
 /**
- * Release network resources allocated for a VM (onion hidden service, etc.).
- * Best-effort — logs a warning on failure but does not throw.
+ * Push mode-specific config into the VM via the network-hook dispatcher.
+ * Idempotent. Returns true on exit 0, false otherwise. Reconciler retries
+ * failed pushes on its next cycle.
  */
-function networkHookCleanup(vmName: string, mode: string): void {
+function pushVmConfig(vmName: string): boolean {
   const result = spawnSync(
     "blockhost-network-hook",
-    ["cleanup", vmName, mode],
-    { timeout: PYTHON_TIMEOUT_MS, encoding: "utf8" },
+    ["push-vm-config", vmName],
+    { timeout: GUEST_EXEC_TIMEOUT_MS, encoding: "utf8" },
   );
   if (result.status !== 0) {
     const errMsg = (result.stderr ?? "").toString().trim();
-    console.warn(`[WARN] network-hook cleanup failed for ${vmName}: ${errMsg || `exit ${String(result.status)}`}`);
+    console.warn(
+      `[WARN] blockhost-network-hook push-vm-config failed for ${vmName}: ${errMsg || `exit ${String(result.status)}`}`,
+    );
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Release per-VM network resources (host- and guest-side) via the dispatcher.
+ * Idempotent. Best-effort — logs a warning on failure but does not throw.
+ */
+function networkHookCleanup(vmName: string): void {
+  const result = spawnSync(
+    "blockhost-network-hook",
+    ["cleanup", vmName],
+    { timeout: GUEST_EXEC_TIMEOUT_MS, encoding: "utf8" },
+  );
+  if (result.status !== 0) {
+    const errMsg = (result.stderr ?? "").toString().trim();
+    console.warn(
+      `[WARN] blockhost-network-hook cleanup failed for ${vmName}: ${errMsg || `exit ${String(result.status)}`}`,
+    );
+  }
+}
+
+/**
+ * Persist the engine-defined `network_config_synced` boolean on a VM record.
+ * Routed through `blockhost-vmdb update-fields` so the write goes through
+ * common's lockfile and races safely with the reconciler and other writers.
+ */
+function setNetworkConfigSynced(vmName: string, synced: boolean): void {
+  const fields = JSON.stringify({ network_config_synced: synced });
+  const result = spawnSync(
+    "blockhost-vmdb",
+    ["update-fields", vmName, "--fields", fields],
+    { timeout: PYTHON_TIMEOUT_MS },
+  );
+  if (result.status !== 0) {
+    const errMsg = result.stderr ? result.stderr.toString().trim() : "";
+    console.warn(
+      `[WARN] Failed to record network_config_synced=${String(synced)} for ${vmName}${errMsg ? ": " + errMsg : ""}`,
+    );
   }
 }
 
@@ -408,19 +432,21 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
 
   console.log(`[INFO] VM summary: ip=${summary.ip}, vmid=${summary.vmid}`);
 
-  // Resolve subscriber-facing host via the network hook.
-  //   broker → IPv6 from broker-allocation.json
-  //   manual → static IP from config
-  //   onion  → .onion (hidden service created + pushed into VM)
-  const hookHost = getConnectionEndpoint(vmName, summary.ip, NETWORK_MODE);
-  const host = hookHost ?? summary.ip;
-  if (!hookHost) {
-    console.warn(`[WARN] Network hook returned no host for ${vmName} (mode=${NETWORK_MODE}); falling back to bridge IP`);
-  } else {
-    console.log(`[INFO] Connection endpoint (${NETWORK_MODE}): ${host}`);
+  // Step 4: Resolve subscriber-facing host via the network-hook dispatcher.
+  // The dispatcher reads vm-db.network_mode for this VM and forwards to the
+  // active plugin. No fallback — minting an NFT against the bridge IP would
+  // bake garbage data into the on-chain credential.
+  const host = resolvePublicAddress(vmName);
+  if (!host) {
+    console.error(
+      `[ERROR] Aborting provisioning for ${vmName}: blockhost-network-hook public-address returned no host`,
+    );
+    console.log("==========================================\n");
+    return;
   }
+  console.log(`[INFO] Connection endpoint: ${host}`);
 
-  // Step 4: Encrypt connection details with user signature
+  // Step 5: Encrypt connection details with user signature
   let userEncryptedOut = "";
 
   if (userSignature) {
@@ -433,7 +459,7 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
     }
   }
 
-  // Step 5: Mint NFT
+  // Step 6: Mint NFT
   // The subscriber field is a payment key hash — mint script needs a bech32 address.
   // Build an enterprise address (key hash only, no staking) from the payment credential.
   const { network: currentNetwork } = loadNetworkConfig();
@@ -464,7 +490,7 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
     return;
   }
 
-  // Step 6: Parse token ID from mint stdout
+  // Parse token ID from mint stdout
   const actualTokenId = parseMintOutput(mintResult.stdout);
   if (actualTokenId === null) {
     console.error(`[WARN] Could not parse token ID from mint output: ${mintResult.stdout.trim()}`);
@@ -474,7 +500,19 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
 
   console.log(`[OK] NFT minted for ${vmName} (token #${actualTokenId})`);
 
-  // Step 7: Update GECOS with actual token ID
+  // Step 7: Push mode-specific VM-side config via the network-hook dispatcher.
+  // Best-effort: the reconciler retries on its next cycle if the guest agent
+  // wasn't ready yet. Either outcome writes network_config_synced so the
+  // reconciler has a definitive flag to gate retries on.
+  const pushed = pushVmConfig(vmName);
+  setNetworkConfigSynced(vmName, pushed);
+  if (pushed) {
+    console.log(`[OK] VM config pushed for ${vmName}`);
+  } else {
+    console.warn(`[WARN] push-vm-config failed for ${vmName}; reconciler will retry`);
+  }
+
+  // Step 8: Update GECOS with actual token ID
   // Wait for the guest agent to start — the VM was just created and may
   // still be booting.  Retry a few times with delays.
   // Not fatal if GECOS failed — reconciler will retry on next cycle
@@ -496,7 +534,7 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
     }
   }
 
-  // Step 8: Mark NFT minted in database
+  // Step 9: Mark NFT minted in database
   markNftMinted(vmName, actualTokenId);
 
   console.log("==========================================\n");
@@ -605,6 +643,12 @@ export async function handleSubscriptionRemoved(sub: TrackedSubscription): Promi
     console.log("==========================================\n");
     return;
   }
+  // Release per-VM network resources before destroy so the active plugin can
+  // reverse guest-side state (e.g. revert /etc/hosts, stop a hidden service)
+  // while the VM is still running. Best-effort — leftover host-side resources
+  // are worse than a redundant cleanup, so we always proceed to destroy.
+  networkHookCleanup(vmName);
+
   console.log(`Destroying VM: ${vmName}`);
 
   const { success, output } = await destroyVm(vmName);
@@ -614,10 +658,6 @@ export async function handleSubscriptionRemoved(sub: TrackedSubscription): Promi
   } else {
     console.error(`[ERROR] Failed to destroy VM ${vmName}: ${output}`);
   }
-
-  // Release network resources (onion hidden service, etc.) regardless of
-  // destroy success — leftover services are worse than a redundant cleanup.
-  networkHookCleanup(vmName, NETWORK_MODE);
 
   console.log("==========================================\n");
 }

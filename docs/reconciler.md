@@ -1,6 +1,10 @@
 # Reconciler
 
-Runs every hour as part of the monitor polling loop. Ensures local state (`vms.json` via the Python `vm_db`) matches on-chain NFT ownership.
+Runs every hour as part of the monitor polling loop. Performs three passes over active/suspended VMs in `vms.json`:
+
+1. **NFT ownership** — match local `owner_wallet` to the on-chain holder; propagate transfers to the VM's GECOS field.
+2. **NFT minting check** — warn when the local DB believes a token was minted but the chain disagrees.
+3. **Network config sync** — retry `blockhost-network-hook push-vm-config` for any VM whose initial post-mint push didn't confirm.
 
 ## NFT Ownership Scan
 
@@ -38,12 +42,24 @@ For VMs where `nft_minted` is `false`, the reconciler checks whether the token i
 
 If the token is not found on-chain and `nft_minted` is `false`, a warning is logged for operator attention — this indicates a minting failure in the pipeline.
 
+## Network Config Sync
+
+For every active/suspended VM whose `network_config_synced` field is not `true`, the reconciler runs:
+
+```
+blockhost-network-hook push-vm-config <vm-name>
+```
+
+The dispatcher resolves the VM's `network_mode` from `vm-db` and forwards to the active plugin. On exit 0 the reconciler writes `network_config_synced = true` via `blockhost-vmdb update-fields`; on failure the flag is left as-is and the next cycle retries.
+
+The handler also writes the flag at provision time (after the post-mint push), so VMs whose first push succeeded are skipped on every subsequent cycle. Plugins implement `push-vm-config` as idempotent (no-op for `broker`/`manual`/`none`), so unconditional retries are safe.
+
 ## Concurrency Guard
 
 A `reconcileInProgress` flag prevents concurrent runs. If the reconciler is triggered while a previous run is still in progress, the new invocation returns immediately without doing any work.
 
 ## Retry Logic
 
-Failed GECOS updates are retried every reconcile cycle (every hour) until they succeed. The `gecos_synced` flag in `vms.json` persists across monitor restarts.
+Failed GECOS updates are retried every reconcile cycle (every hour) until they succeed. The `gecos_synced` flag in `vms.json` persists across monitor restarts. Failed `push-vm-config` calls are retried under the same cadence via `network_config_synced`.
 
 Blockfrost query errors for individual VMs are logged and counted but do not abort the rest of the reconcile pass.
